@@ -175,7 +175,7 @@ import Testing
     }
 
     @Test func vlessPostQuantumRealityIsRefused() {
-        // sing-box (1.13, 1.14) has no option for it.
+        // sing-box 1.13 rejects the whole config over this field.
         #expect(throws: (any Error).self) {
             try LinkParser.parse("vless://\(Self.uuid)@h.example.org:443?security=reality&pbk=k&pqv=MLDSA65KEY")
         }

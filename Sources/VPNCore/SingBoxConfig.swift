@@ -212,10 +212,6 @@ public enum SingBoxConfig {
                 "mtu": .int(profile.mtu ?? 9000),
                 "auto_route": true,
                 "stack": "gvisor",
-                // macOS's DNS is the helper's to set and put back (SystemDNS),
-                // also after a crash. sing-box would set its own on the TUN,
-                // which nothing restores if it dies.
-                "dns_mode": "disabled",
             ]] + (env.captive.map { c -> [JSON] in [[
                 "type": "mixed", "tag": .string(captiveTag),
                 "listen": "127.0.0.1", "listen_port": .int(Int(c.port)),
@@ -351,6 +347,7 @@ public enum SingBoxConfig {
             "rules": .array(dnsRules),
             "final": .string(final),
             "strategy": "ipv4_only",
+            "independent_cache": true,
         ]
     }
 

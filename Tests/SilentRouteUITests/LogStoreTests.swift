@@ -29,11 +29,20 @@ import Testing
         #expect(store.text(of: sessions[1].id)?.contains("turned off") == true)
         #expect(store.text(of: "../notes.txt") == nil)
 
+        // A large one: the page gets its two ends, a saved copy all of it.
+        let big = "# Silent Route session · profile: Home\n" + (0..<20000).map { "line \($0)\n" }.joined()
+        try big.write(to: unindexed.appendingPathComponent(SessionLogFormat.fileName(for: t0.addingTimeInterval(-60))),
+                      atomically: true, encoding: .utf8)
+        let id = try #require(store.sessions().last?.id)
+        let shown = try #require(store.text(of: id, tail: 1000))
+        #expect(shown.contains("not shown") && !shown.contains("line 15000\n"))
+        #expect(store.text(of: id, tail: .max) == big)
+
         // Switching both on: the folder is renamed (sessions kept), backups allowed.
         store.apply(includeInBackups: true, indexable: true)
         #expect(!fm.fileExists(atPath: unindexed.path))
         #expect(store.folder?.lastPathComponent == SessionLogFormat.indexed)
-        #expect(store.sessions().count == 2)
+        #expect(store.sessions().count == 3)
         #expect(try base.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == false)
     }
 }

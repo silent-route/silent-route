@@ -1,6 +1,7 @@
 {
   "dns" : {
     "final" : "dns-r-00000000-0000-0000-0000-0000000000d0",
+    "independent_cache" : true,
     "rules" : [
       {
         "action" : "route",
@@ -81,7 +82,6 @@
         "fdfe:dcba:9876::5/126"
       ],
       "auto_route" : true,
-      "dns_mode" : "disabled",
       "mtu" : 9000,
       "stack" : "gvisor",
       "tag" : "tun-in",

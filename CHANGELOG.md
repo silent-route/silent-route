@@ -1,9 +1,12 @@
 # Changelog
 
-## 1.7.0-beta
+## 1.6.8-beta
 
-- **sing-box 1.14.3** (was 1.13.16, whose line is no longer updated): newer uTLS browser fingerprints, QUIC (Hysteria2) and network stack, and the fixes since. macOS's DNS stays with Silent Route as before: sing-box 1.14 would set its own on the tunnel, which nothing puts back if it stops unexpectedly, so that is turned off.
+Replaces 1.7.0-beta, which was withdrawn. It moved to sing-box 1.14.3, and on some networks Hysteria2 kept dropping on macOS: the new QUIC code sends larger packets to probe the path, and when a router answers that a packet is too large, macOS reports it in a way that sing-box 1.14 treats as fatal for the whole connection. Every site and app going through that server then reconnected, over and over. This release stays on sing-box 1.13.16, as 1.6.7 did, and keeps the other fixes of 1.7.0. If you installed 1.7.0-beta, install this one by hand: the app does not offer a lower version as an update.
+
 - **A list of sites and addresses no longer sends other names past the tunnel.** A list used in a route also decides where the names in it are looked up. When a list held addresses as well (`IP-CIDR` lines, a country's networks next to its sites), sing-box asked that route's resolver about every name, in the list or not, to compare the answer with those addresses; for a direct route that was past the tunnel. Now only a list's sites take part in DNS; traffic is still matched against the whole list. Lists already downloaded are converted when the helper starts, without downloading them again.
+- **Save… and Export… in the log window write the whole log.** For a large session they wrote what the window shows: its beginning and its end, with the middle left out.
+- **The log shows harmless connection closes in grey, not red.** sing-box calls them errors: the server closing an idle connection with code 0 ("no error"), or an app having already dropped its side ("endpoint not connected"). Nothing went wrong in either.
 
 ## 1.6.7-beta
 

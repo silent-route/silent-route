@@ -115,6 +115,7 @@ func sampleLogs() -> LogStore {
     2026-10-14 12:03:11 [helper] connected
     +0000 2026-10-14 12:40:02 WARN inbound/tun[tun-in]: link icmp connection from 172.19.0.5 to 192.0.2.1: icmp is not supported
     2026-10-14 13:10:44 [helper] the Mac woke from sleep
+    +0000 2026-10-14 12:52:17 ERROR [2323960577 20m1s] connection: connection upload closed: stream 3852 canceled by remote with error code 0
     +0000 2026-10-14 13:10:45 ERROR connection: open connection to 198.51.100.7:8000 using outbound/socks: i/o timeout
     2026-10-14 13:10:51 [helper] route “Streaming”: now through “Netherlands”
     2026-10-14 13:11:20 [helper] route “Streaming”: now through “Backup Proxy”

@@ -368,8 +368,8 @@ public enum LinkParser {
                 p.ignore("spx", because: "sing-box has no Reality spider")
                 if t.fingerprint == nil { t.fingerprint = "chrome" }   // Reality requires uTLS
                 if let pqv = p.take("pqv") {
-                    // sing-box (1.13, 1.14) has no option for an ML-DSA-65
-                    // verify key. Better to say so here.
+                    // An ML-DSA-65 verify key makes sing-box 1.13
+                    // refuse the whole config. Better to say so here.
                     throw .unsupported("post-quantum Reality verification (pqv, \(pqv.prefix(12))…)")
                 }
             } else {

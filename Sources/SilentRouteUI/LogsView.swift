@@ -77,10 +77,11 @@ struct LogsView: View {
         .disabled(running)
     }
 
+    /// The whole file, also the part of a large one the page leaves out.
     private func export(_ id: LogSession.ID, redacted: Bool) {
         let store = self.store
         Task {
-            guard let text = await Task.detached(operation: { store.text(of: id) }).value else { return }
+            guard let text = await Task.detached(operation: { store.text(of: id, tail: .max) }).value else { return }
             savingName = id.replacingOccurrences(of: ".log", with: "")
             saving = LogDocument(text: redacted ? LogRedactor.redact(text) : text)
         }
@@ -124,8 +125,8 @@ struct LogsView: View {
                     Button("Copy") { copy(redacted: false) }
                     Button("Copy Without Addresses") { copy(redacted: true) }
                     Divider()
-                    Button("Save…") { saving = LogDocument(text: text) }
-                    Button("Save Without Addresses…") { saving = LogDocument(text: LogRedactor.redact(text)) }
+                    Button("Save…") { if let selected { export(selected, redacted: false) } }
+                    Button("Save Without Addresses…") { if let selected { export(selected, redacted: true) } }
                 } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
@@ -260,13 +261,23 @@ struct LogTextView: NSViewRepresentable {
         var first = true
     }
 
+    /// A connection that ended without anything going wrong, which sing-box
+    /// still logs as an error: the server closed an idle stream with code 0
+    /// ("no error"), or the app had already dropped its side.
+    static func isHarmlessClose(_ line: Substring) -> Bool {
+        line.contains("ERROR") && line.contains("connection: connection ")
+            && (line.contains("canceled by remote with error code 0") || line.hasSuffix("endpoint not connected"))
+    }
+
     static func styled(_ text: String) -> NSAttributedString {
         let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         let bold = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
         let out = NSMutableAttributedString()
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
-            if line.contains("ERROR") || line.contains("FATAL") {
+            if isHarmlessClose(line) {
+                attrs[.foregroundColor] = NSColor.secondaryLabelColor
+            } else if line.contains("ERROR") || line.contains("FATAL") {
                 attrs[.foregroundColor] = NSColor.systemRed
             } else if line.contains("WARN") {
                 attrs[.foregroundColor] = NSColor.systemOrange

@@ -55,8 +55,8 @@ public struct LogStore: Sendable {
         return (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil
     }
 
-    /// A session's text; for a large file its head and its last `tail`
-    /// bytes.
+    /// A session's text; for a file larger than `tail` bytes, its head and
+    /// its last `tail` bytes (`.max`: all of it).
     public func text(of id: String, tail: Int = 2_000_000) -> String? {
         guard let url = url(of: id), let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }

@@ -109,9 +109,7 @@ struct SingBoxCheckTests {
     /// Some of what sing-box is about to drop it says only once it runs, not
     /// in `check`: the full config is run for a moment, its TUN swapped for
     /// a local proxy (a TUN needs root), and must start without a warning.
-    /// A list of sites and addresses is in it, its names apart for DNS — in
-    /// a DNS rule, the whole list is what sing-box warns about (checked
-    /// too, so the test is known to see it).
+    /// A list of sites and addresses is in it, its names apart for DNS.
     @Test func fullProfileRunsWithoutWarnings() throws {
         let dir = SingBox.work.appendingPathComponent("run-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -131,9 +129,6 @@ struct SingBoxCheckTests {
                                     namesPath: dir.appendingPathComponent("names.srs").path)
         let out = try SingBox.runBriefly(SingBoxConfig.generate(Fixtures.profile, env: env), in: dir)
         #expect(!out.contains("WARN") && !out.contains("ERROR") && !out.contains("FATAL"), "sing-box said: \(out)")
-
-        env.lists[mixedURL]?.namesPath = dir.appendingPathComponent("mixed.srs").path
-        #expect(try SingBox.runBriefly(SingBoxConfig.generate(Fixtures.profile, env: env), in: dir).contains("WARN"))
     }
 
     /// The helper's server check, as it runs: no TUN, nothing to swap.
