@@ -183,10 +183,10 @@ func renderWindow<V: View>(_ name: String, size: CGSize, then step: (@MainActor 
 MainActor.assumeIsolated {
     NSApplication.shared.setActivationPolicy(.accessory)
 
-    render("menu-off", MenuBarView(model: model()))
-    render("menu-connected", MenuBarView(model: model(.ready, connected, speed: speed)))
-    render("menu-reconnecting", MenuBarView(model: model(.ready, reconnecting)))
-    render("menu-not-installed", MenuBarView(model: model(.notInstalled)))
+    render("menu-off", MenuBarHeader(model: model()))
+    render("menu-connected", MenuBarHeader(model: model(.ready, connected, speed: speed)))
+    render("menu-reconnecting", MenuBarHeader(model: model(.ready, reconnecting)))
+    render("menu-not-installed", MenuBarHeader(model: model(.notInstalled)))
 
     let win = CGSize(width: 1000, height: 700)
     render("window-routes", size: win, MainWindow(model: model(.ready, connected, speed: speed), selection: home.id))

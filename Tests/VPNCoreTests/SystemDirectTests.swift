@@ -77,9 +77,17 @@ import Testing
         return try #require(inbounds.first { $0["type"] == "tun" })
     }
 
+    /// The TUN's exclusions but the local network's, which go whenever the
+    /// local network is reachable (`theLocalNetworkIsLeftToMacOS`).
+    func excluded(_ cfg: JSON) throws -> [String] {
+        guard case .array(let all)? = try tun(cfg)["route_exclude_address"] else { return [] }
+        let local = Set(SingBoxConfig.localExclusions.map(\.description))
+        return all.compactMap { if case .string(let s) = $0, !local.contains(s) { s } else { nil } }
+    }
+
     @Test func theCountrysAddressesAreLeftToMacOS() throws {
         let cfg = try SingBoxConfig.generate(Self.profile, env: Self.env())
-        #expect(try tun(cfg)["route_exclude_address"] == ["198.51.100.0/24", "2001:db8:100::/48"])
+        #expect(try excluded(cfg) == ["198.51.100.0/24", "2001:db8:100::/48"])
         #expect(SingBoxConfig.directAddresses(Self.profile, env: Self.env()) == Self.country)
         // sing-box keeps the route's sites, never its addresses: what still
         // comes in for one (a socket bound to the tunnel) goes the tunnel's way.
@@ -117,6 +125,32 @@ import Testing
         #expect(SingBoxConfig.directAddresses(p, env: Self.env()) == [IPNetwork("198.51.100.0/25")!, IPNetwork("2001:db8:100::/48")!])
     }
 
+    /// Any local network, not only the Mac's own (a work VPN's, a phone's
+    /// hotspot), is left to macOS while it is reachable, as the kill switch
+    /// lets it out; while it is not, sing-box sees it.
+    @Test func theLocalNetworkIsLeftToMacOS() throws {
+        var p = Self.profile
+        p.lan = .allow
+        p.routes.insert(Route(id: Self.blockID, name: "Office", conditions: Conditions(destinations: [.cidr(IPNetwork("10.20.0.0/16")!)]),
+                              target: .direct), at: 0)
+        var cfg = try SingBoxConfig.generate(p, env: Self.env())
+        guard case .array(let all)? = try tun(cfg)["route_exclude_address"] else { Issue.record("nothing excluded"); return }
+        let left = all.compactMap { if case .string(let s) = $0 { IPNetwork(s) } else { nil } }
+        for n in ["192.168.1.1", "10.1.2.3", "172.20.10.1", "100.64.0.1", "169.254.1.1", "224.0.0.251", "fd00::1", "fe80::1"] {
+            #expect(left.contains { $0.contains(IPNetwork(n)!) }, "\(n) goes into the tunnel")
+        }
+        // The TUN's own networks stay in: macOS's resolver asks sing-box
+        // at an address there.
+        for n in [SingBoxConfig.tunDNS, "172.19.0.5", "fdfe:dcba:9876::5"] {
+            #expect(!left.contains { $0.contains(IPNetwork(n)!) }, "\(n) is left out of the tunnel")
+        }
+        // Nothing twice: the office's network is in 10.0.0.0/8.
+        #expect(!all.contains("10.20.0.0/16"))
+        p.lan = .block
+        cfg = try SingBoxConfig.generate(p, env: Self.env())
+        #expect(try tun(cfg)["route_exclude_address"]?.text.contains("192.168.0.0/16") != true)
+    }
+
     @Test func leftToSingBoxWhenMacOSCannotDoIt() throws {
         // A list whose addresses are not known.
         #expect(SingBoxConfig.directAddresses(Self.profile, env: Fixtures.env).isEmpty)
@@ -128,7 +162,7 @@ import Testing
             change(&p.routes[1])
             #expect(SingBoxConfig.directAddresses(p, env: Self.env()).isEmpty)
             let cfg = try SingBoxConfig.generate(p, env: Self.env())
-            #expect(try tun(cfg)["route_exclude_address"] == nil)
+            #expect(try excluded(cfg).isEmpty)
             #expect(cfg["dns"]!.text.contains("fakeip") == false)
         }
     }

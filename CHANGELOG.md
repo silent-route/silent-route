@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.0-beta
+
+- **The menu bar icon opens a real menu.** It used to open a panel of its own; on macOS 26 the system draws the icon itself and only knows about real menus, so there the highlight blinked and the menu bar slid away over a full-screen app. Now it is a menu like Wi-Fi's, on every version: the icon stays highlighted, the menu bar stays over a full-screen app, both mouse buttons open it, and the keyboard works in it. The state, the switch and the traffic are at its top; profiles are menu items with a check mark. The Transparency setting is gone with the panel: the menu has the system's look.
+- **No slow tunnel after sleep.** After the Mac wakes (also from Power Nap), sessions with the servers start anew at once, instead of the old ones being used until the server answers with a reset. A session carried through many sleeps could stay slow for hours; only reconnecting helped. The same happens when the network under the tunnel changes (another Wi-Fi, a new address).
+- **The whole local network stays out of the tunnel** while it is reachable: any private, link-local and multicast range, not only the Mac's own network (a work VPN's, a phone's hotspot). Ping to such addresses works too.
+
 ## 1.7.12-beta
 
 - Over a full-screen app, the menu bar stays while the menu bar panel is open, as it does for the system's menus; the panel closes only on a click elsewhere, Esc, or a click on the icon.

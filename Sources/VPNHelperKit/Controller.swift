@@ -150,6 +150,8 @@ public actor Controller {
     private var downSince: Date?
     /// The quick checks after a network change; one at a time.
     private var probing: Task<Void, Never>?
+    /// The network under the tunnel when last looked at (`underlay()`).
+    private var underlay: String?
 
     public init(profile: Profile, options: Options, pf: PacketFilter, engine: Engine, network: NetworkInspector,
                 store: StateStore, clock: Clock) {
@@ -459,15 +461,51 @@ public actor Controller {
         return measured.values.contains { $0 != nil }
     }
 
-    /// After sleep or a network change: look every couple of seconds until
-    /// the servers answer again, instead of waiting for the next tick. The
+    /// The Mac woke, from a full or a dark wake (Power Nap). Its sessions
+    /// with the servers went silent meanwhile, and a QUIC server forgets a
+    /// silent one: the first packets after the wake would get a stateless
+    /// reset, and a session carried through many sleeps can stay slow for
+    /// hours. New sessions start before anything is sent; sing-box does
+    /// that on its own after a sleep only on Windows.
+    public func woke() async {
+        guard phase == .connected else { return }
+        session(.note("new sessions with the servers after the sleep"))
+        await engine.resetConnections()
+        // Right after the wake there may be no network yet: then the last
+        // one stays to compare with, and the one that comes resets again.
+        if let now = await network.underlay() { underlay = now }
+        startProbe()
+    }
+
+    /// After a network change: look every couple of seconds until the
+    /// servers answer again, instead of waiting for the next tick. The
     /// system reports changes in bursts (our own TUN coming up is one), so
-    /// one round of checks covers them all.
+    /// one round of checks covers them all. Another network under the
+    /// tunnel (Wi-Fi to Wi-Fi on the same interface, a new address) also
+    /// gets new sessions with the servers: the old ones went out from an
+    /// address that is gone. sing-box starts new ones by itself only when
+    /// the interface changes.
     public func networkChanged() async {
+        guard phase == .connected else { return }
+        let now = await network.underlay()
+        guard phase == .connected else { return }
+        if let now, now != underlay {
+            let was = underlay
+            underlay = now
+            if was != nil {
+                session(.note("another network under the tunnel; new sessions with the servers"))
+                await engine.resetConnections()
+            }
+        }
         guard phase == .connected, probing == nil else { return }
         // In the log: the errors sing-box prints right now (connections cut
         // by the change) have a cause a reader can see.
         session(.note("the network changed; checking the servers"))
+        startProbe()
+    }
+
+    private func startProbe() {
+        guard probing == nil else { return }
         let my = epoch
         probing = Task { [weak self] in await self?.probe(epoch: my) }
     }
@@ -748,6 +786,7 @@ public actor Controller {
             lastError = nil
             set(.connected)
             session(.note("connected"))
+            underlay = await network.underlay()
             await network.overrideDNS(server: SingBoxConfig.tunDNS, local: localDNS)
             return
         }
@@ -771,6 +810,7 @@ public actor Controller {
         lastError = nil
         set(.connected)
         session(.note("connected"))
+        underlay = await network.underlay()
         // macOS's resolver into the tunnel: no name is asked of the router.
         await network.overrideDNS(server: SingBoxConfig.tunDNS, local: localDNS)
     }

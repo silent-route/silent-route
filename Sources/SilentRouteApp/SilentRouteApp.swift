@@ -9,8 +9,8 @@ import SwiftUI
 // running.
 //
 // The window and the status item are AppKit-owned (SwiftUI inside): the
-// status item must open on both mouse buttons, which MenuBarExtra does not
-// do, and the window must be openable from it at any time.
+// status item's menu opens on both mouse buttons, which MenuBarExtra's does
+// not, and the window must be openable from it at any time.
 
 @main
 struct SilentRouteApp: App {
@@ -86,8 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static weak var shared: AppDelegate?
     let model = AppModel(backend: XPCBackend())
     private var statusItem: NSStatusItem?
-    private var panel: StatusPanel?
-    private var statusClicks: Any?
+    private var statusMenu: StatusMenu?
     private var mainWindow: NSWindow?
     private var updateWindow: NSWindow?
     private var launchedAtLogin = false
@@ -132,12 +131,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Closing the window keeps the app (and its menu bar icon) running.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    /// The open panel has told the system a menu is open: it says it is
-    /// closed before the app goes.
-    func applicationWillTerminate(_ notification: Notification) {
-        panel?.dismiss()
-    }
-
     /// Clicking the Dock icon brings the window back: the update window
     /// while an update runs (other windows may cover it), else the main one.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -164,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let systemQuit = Self.isSystemQuit
         let reply = OneShot { sender.reply(toApplicationShouldTerminate: $0) }
         Task {
-            panel?.dismiss()
+            statusMenu?.close()
             guard await model.resolveAllUnsaved(.quit) else {
                 // A save that failed says why in the window.
                 if !model.unsavedProfiles.isEmpty { showMainWindow() }
@@ -212,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static let defaultWidth: CGFloat = 1040
 
     func showMainWindow() {
-        panel?.dismiss()
+        statusMenu?.close()
         if mainWindow == nil {
             let host = NSHostingController(rootView: MainWindow(model: model).frame(minWidth: 780, minHeight: 540))
             host.sceneBridgingOptions = [.toolbars, .title]
@@ -255,44 +248,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func setUpStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        // The action is for VoiceOver and other accessibility presses;
-        // clicks are taken before the button sees them (below).
-        item.button?.target = self
-        item.button?.action = #selector(statusItemClicked)
+        let menu = StatusMenu(model: model,
+                              openMain: { [weak self] in self?.showMainWindow() },
+                              emergencyRestore: { [weak self] in self?.confirmEmergencyRestore() })
+        item.menu = menu.menu
         statusItem = item
-        watchStatusClicks()
-
-        let root = MenuBarView(model: model) { [weak self] in self?.showMainWindow() }
-            .fixedSize()
-            .onGeometryChange(for: CGSize.self, of: { $0.size }) { [weak self] _ in
-                self?.panel?.refit()
-            }
-        panel = StatusPanel(rootView: root)
+        statusMenu = menu
         updateIcon()
-    }
-
-    /// Opens and closes the panel on the press of either mouse button, as
-    /// the system's menu bar items do. The button never tracks the click:
-    /// if it did, it would switch its highlight off when the click ends,
-    /// and the highlight the open panel keeps on it would blink. ⌘-drag,
-    /// which moves the icon, is left to the button.
-    private func watchStatusClicks() {
-        statusClicks = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            let window = event.window.map(ObjectIdentifier.init)
-            let command = event.modifierFlags.contains(.command)
-            let taken = MainActor.assumeIsolated { () -> Bool in
-                guard let self, !command, let button = self.statusItem?.button,
-                      let bw = button.window, window == ObjectIdentifier(bw) else { return false }
-                self.panel?.toggle(below: button)
-                return true
-            }
-            return taken ? nil : event
-        }
-    }
-
-    @objc private func statusItemClicked() {
-        guard let button = statusItem?.button else { return }
-        panel?.toggle(below: button)
     }
 
     /// Re-renders the icon whenever the state it shows changes. Connected:
@@ -317,7 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func confirmEmergencyRestore() {
         guard model.canTurnOff else { return }
-        panel?.dismiss()
+        statusMenu?.close()
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -409,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             updateWindow = w
         }
         guard updateWindow?.isVisible == false else { return }
-        panel?.dismiss()
+        statusMenu?.close()
         updateWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

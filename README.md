@@ -25,6 +25,7 @@ Intel and Apple Silicon, macOS 14 Sonoma through macOS 27 Golden Gate.
 - No DNS leaks: while the VPN is on, macOS asks sing-box (on this Mac's port 53, closed to the network), and only sing-box may ask the router. Local names (`nas.lan`, zones you choose) still work. Names of private addresses (192.168.x.x, 10.x.x.x and the like) never go through a tunnel: the router answers them when the local network is reachable directly, otherwise no one does. Saved network settings are never changed.
 - Hotel and café Wi-Fi: the VPN stays on behind its kill switch and offers **Open Login Page** — a small window whose traffic alone goes out directly.
 - Short drops (a Wi-Fi switch, sleep) don't restart sing-box: it restarts only after 12 seconds without an answer, and a server counts as down after two missed checks in a row.
+- After sleep, or on another network under the tunnel, sessions with the servers start anew at once, before anything is sent: a QUIC server (Hysteria2, TUIC) forgets a session that went silent, and one kept through many sleeps can stay slow.
 - Nothing starts on its own, not even after a reboot, and nothing Silent Route sets up survives one.
 
 **Monitor**

@@ -250,8 +250,16 @@ public enum SingBoxConfig {
             "auto_route": true,
             "stack": "gvisor",
         ]
-        // Left out of the TUN's routes: macOS sends them by its own.
-        let excluded = union(system)
+        // Left out of the TUN's routes: macOS sends them by its own. So is
+        // the local network, when it is reachable: any of it, not only the
+        // Mac's own (a work VPN's, a phone's hotspot), as the kill switch
+        // lets it out; sing-box would send it direct anyway, but only TCP and
+        // UDP (no ping).
+        var excluded = union(system)
+        if profile.lan == .allow {
+            let all = union([UUID(): excluded + localExclusions])
+            excluded = all.filter { n in !all.contains { $0 != n && $0.contains(n) } }
+        }
         if !excluded.isEmpty { tun["route_exclude_address"] = .strings(excluded.map(\.description)) }
         var cacheFile: [String: JSON] = ["enabled": true, "path": .string(env.cacheFile)]
         // Apps keep a fake address for as long as its name's answer lives:
@@ -408,6 +416,18 @@ public enum SingBoxConfig {
             "outbounds": [outbound(tunnel, tag: "probe"), ["type": "direct", "tag": .string(directTag)]],
             "route": .object(route),
         ]
+    }
+
+    /// The local network's ranges, as the kill switch lets them out
+    /// (`PFRules`): private, carrier NAT, link-local, multicast, limited
+    /// broadcast, and IPv6 unique-local, link-local and multicast.
+    static let localNetworks: [IPNetwork] = (PFRules.lanNetworks + ["fc00::/7", "fe80::/10", "ff00::/8"]).compactMap(IPNetwork.init)
+
+    /// The local network as left out of the TUN's routes: all of it but
+    /// the TUN's own networks (172.19.0.4/30 is in 172.16.0.0/12), which
+    /// must stay in: macOS's resolver points at sing-box there.
+    static let localExclusions: [IPNetwork] = localNetworks.flatMap { n in
+        tunNetworks.compactMap(IPNetwork.init).reduce([n]) { pieces, t in pieces.flatMap { $0.subtracting(t) } }
     }
 
     // MARK: - DNS

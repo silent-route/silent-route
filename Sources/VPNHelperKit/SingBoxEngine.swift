@@ -232,6 +232,10 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
         return ms
     }
 
+    public func resetConnections() async {
+        _ = try? await request("DELETE", "/connections", timeout: 3)
+    }
+
 
     /// Keep the log bounded, like every log: at 4 MB the current file becomes .1.
     func rotateLog() {

@@ -232,7 +232,9 @@ enum Fixtures {
         // TUN's routes); its site stays here.
         #expect(rules[7]["domain_suffix"] == ["corp.example"] && rules[7]["outbound"] == "direct")
         guard case .array(let inbounds)? = cfg["inbounds"] else { Issue.record("no inbounds"); return }
-        #expect(inbounds[0]["route_exclude_address"] == ["10.20.0.0/16"])
+        // 10.20.0.0/16 is in the local network's 10.0.0.0/8, left out as a whole.
+        guard case .array(let left)? = inbounds[0]["route_exclude_address"] else { Issue.record("nothing left out"); return }
+        #expect(Set(left.map(\.text)) == Set(SingBoxConfig.localExclusions.map { JSON.string($0.description).text }))
         // Apps + ports + network → AND of three groups; limited to a
         // network, it never sees a ping, so no refusal before it.
         #expect(rules[8]["mode"] == "and")

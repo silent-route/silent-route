@@ -122,18 +122,10 @@ enum Daemon {
         listener.delegate = delegate
         listener.resume()
 
-        // Health checks. A gap much longer than the interval means the Mac
-        // slept: check at once instead of trusting a tunnel from before.
+        // Health checks.
         Task {
-            var last = Date()
             while true {
                 try? await Task.sleep(for: .seconds(10))
-                let now = Date()
-                if now.timeIntervalSince(last) > 30 {
-                    log.info("wake detected")
-                    sessionLog.write("the Mac woke from sleep")
-                }
-                last = now
                 await controller.healthTick()
                 sessionLog.enforceLimit()
                 Daemon.trimOwnLog()
@@ -161,6 +153,15 @@ enum Daemon {
         monitor.pathUpdateHandler = { _ in Task { await controller.networkChanged() } }
         monitor.start(queue: DispatchQueue(label: "path"))
 
+        // Wake (also a dark wake): new sessions with the servers at once,
+        // instead of trusting ones from before the sleep.
+        let power = PowerEvents(queue: DispatchQueue(label: "power")) {
+            log.info("wake")
+            sessionLog.write("the Mac woke from sleep")
+            Task { await controller.woke() }
+        }
+        if power == nil { log.error("no sleep and wake notifications") }
+
         // launchd sends SIGTERM on shutdown and on unload. Stop cleanly so the
         // network is left as macOS expects it.
         signal(SIGTERM, SIG_IGN)
@@ -173,7 +174,7 @@ enum Daemon {
         }
         term.resume()
 
-        withExtendedLifetime((listener, delegate, monitor, term)) {
+        withExtendedLifetime((listener, delegate, monitor, power, term)) {
             dispatchMain()
         }
     }

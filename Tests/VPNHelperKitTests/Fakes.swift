@@ -49,6 +49,8 @@ actor World {
     var port53Taken = false
     /// The network wants a login (a hotel Wi-Fi).
     var captive = false
+    /// The network under the tunnel (`NetworkInspector.underlay`).
+    var underlay: String? = "en0 192.168.1.2 via 192.168.1.1"
 
     func record(_ s: String) { log.append(s) }
     func set(_ body: @Sendable (isolated World) -> Void) { body(self) }
@@ -145,11 +147,13 @@ struct FakeEngine: Engine {
         let w = world
         return await w.set2 { $0.healthy && !$0.running.isEmpty && !$0.deadTags.contains(tag) } ? 40 : nil
     }
+    func resetConnections() async { await world.record("engine.reset") }
 }
 
 struct FakeNetwork: NetworkInspector {
     let world: World
     func tunInterface() async -> String? { await world.tun }
+    func underlay() async -> String? { await world.underlay }
     func foreignTunnel() async -> String? { await world.foreign }
     func restoreRouting() async { await world.set { $0.routingRestored += 1; $0.log.append("net.restore") } }
     func removeStaleTunnelRoutes() async { await world.set { $0.log.append("net.staleRoutes") } }

@@ -82,6 +82,15 @@ public struct SystemNetwork: NetworkInspector {
         return Self.interfaces().first { $0.address == want }?.name
     }
 
+    public func underlay() async -> String? {
+        guard let store = SCDynamicStoreCreate(nil, "Silent Route" as CFString, nil, nil),
+              let g = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
+              let iface = g["PrimaryInterface"] as? String, !iface.hasPrefix("utun") else { return nil }
+        let own = SCDynamicStoreCopyValue(store, "State:/Network/Interface/\(iface)/IPv4" as CFString) as? [String: Any]
+        let addresses = (own?["Addresses"] as? [String] ?? []).joined(separator: ",")
+        return "\(iface) \(addresses) via \(g["Router"] as? String ?? "-")"
+    }
+
     /// Another VPN owns the route to the internet. Only asked before our own
     /// sing-box starts, so any utun on that route belongs to someone else.
     /// (auto_route installs two /1 routes rather than a default, so the

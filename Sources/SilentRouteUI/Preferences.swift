@@ -10,17 +10,6 @@ public enum Preferences {
     public static let notificationsKey = "notifications"
     public static let sessionCounterKey = "sessionCounter"
     public static let logsInBackupsKey = "logsInBackups"
-    public static let transparencyKey = "transparency"
-
-    /// How see-through the menu bar panel is.
-    public enum Transparency: String, CaseIterable, Identifiable, Sendable {
-        case standard, more
-        public var id: Self { self }
-    }
-
-    public static var transparency: Transparency {
-        UserDefaults.standard.string(forKey: transparencyKey).flatMap(Transparency.init(rawValue:)) ?? .standard
-    }
     public static let logsIndexedKey = "logsIndexed"
 
     public enum Appearance: String, CaseIterable, Identifiable, Sendable {

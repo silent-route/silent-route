@@ -38,11 +38,18 @@ public protocol Engine: Sendable {
     /// Round trip of a test request through one outbound, in milliseconds;
     /// nil if it does not answer (or the API itself is unreachable).
     func delay(_ tag: String) async -> Int?
+    /// Close every connection and every session with a server (clash API
+    /// `DELETE /connections`, sing-box's network reset): a QUIC server's
+    /// next packets go into a new session with a fresh handshake.
+    func resetConnections() async
 }
 
 public protocol NetworkInspector: Sendable {
     /// The TUN interface sing-box created, if it exists.
     func tunInterface() async -> String?
+    /// The network under the tunnel: its interface, address and router, as
+    /// one string to compare. nil while there is none.
+    func underlay() async -> String?
     /// A description of another VPN that already owns the default route.
     func foreignTunnel() async -> String?
     /// pf blocks traffic outside our anchor: most likely another VPN's kill

@@ -62,9 +62,13 @@ import Testing
         try await h.controller.start()
         let config = try #require(await h.world.lastConfig)
         let tun = try #require(((try JSONSerialization.jsonObject(with: config) as? [String: Any])?["inbounds"] as? [[String: Any]])?.first)
-        #expect(tun["route_exclude_address"] as? [String] == ["198.51.100.0/24"])
+        // The local network is left out too, and let out by the kill
+        // switch's rules for it.
+        let local = SingBoxConfig.localExclusions.map(\.description)
+        #expect((tun["route_exclude_address"] as? [String])?.filter { !local.contains($0) } == ["198.51.100.0/24"])
         let rules = try #require(await h.world.anchorRules)
         #expect(rules.contains("table <silentroute-direct> const { \\\n  198.51.100.0/24 }"))
+        #expect(rules.contains("pass out quick inet to { \(PFRules.lanNetworks.joined(separator: ", ")) }"))
         let log = await h.world.log
         let stale = try #require(log.firstIndex(of: "net.staleRoutes"))
         #expect(stale < log.firstIndex { $0.hasPrefix("engine.launch") }!)
@@ -475,6 +479,39 @@ import Testing
         #expect(sleeps.count >= 6)
         await h.world.set { $0.healthy = true }
         #expect(await h.wait(for: .connected))
+        await h.controller.stop()
+    }
+
+    @Test func aWakeStartsNewSessionsWithTheServers() async throws {
+        let h = Harness()
+        await h.controller.woke()                            // off: nothing to reset
+        #expect(await !h.world.log.contains("engine.reset"))
+        try await h.controller.start()
+        await h.controller.woke()
+        #expect(await h.world.log.filter { $0 == "engine.reset" }.count == 1)
+        #expect(await h.controller.status.phase == .connected)
+        #expect(await h.world.log.filter { $0.hasPrefix("engine.launch") }.count == 1, "sing-box was not restarted")
+        await h.controller.stop()
+    }
+
+    @Test func anotherNetworkUnderTheTunnelStartsNewSessions() async throws {
+        let h = Harness()
+        try await h.controller.start()
+        // Our own TUN coming up, or anything else that leaves the network
+        // under the tunnel as it was: the sessions stay.
+        await h.controller.networkChanged()
+        #expect(await !h.world.log.contains("engine.reset"))
+        // Another Wi-Fi on the same interface.
+        await h.world.set { $0.underlay = "en0 10.0.0.7 via 10.0.0.1" }
+        await h.controller.networkChanged()
+        await h.controller.networkChanged()
+        #expect(await h.world.log.filter { $0 == "engine.reset" }.count == 1)
+        // No network for a moment, then the same one back: nothing new.
+        await h.world.set { $0.underlay = nil }
+        await h.controller.networkChanged()
+        await h.world.set { $0.underlay = "en0 10.0.0.7 via 10.0.0.1" }
+        await h.controller.networkChanged()
+        #expect(await h.world.log.filter { $0 == "engine.reset" }.count == 1)
         await h.controller.stop()
     }
 
