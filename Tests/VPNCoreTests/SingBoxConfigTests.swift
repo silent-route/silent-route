@@ -199,9 +199,11 @@ enum Fixtures {
         // Single condition group → plain rule.
         #expect(rules[6]["process_path_regex"] == [#"^/Applications/Telegram\.app/"#])
         #expect(rules[6]["outbound"] == .string(SingBoxConfig.routeTag(Fixtures.telegramID)))
-        // Two destination kinds → OR inside, no AND wrapper needed.
-        #expect(rules[7]["type"] == "logical")
-        #expect(rules[7]["mode"] == "or")
+        // Direct for everything: macOS takes its network (left out of the
+        // TUN's routes); its site stays here.
+        #expect(rules[7]["domain_suffix"] == ["corp.example"] && rules[7]["outbound"] == "direct")
+        guard case .array(let inbounds)? = cfg["inbounds"] else { Issue.record("no inbounds"); return }
+        #expect(inbounds[0]["route_exclude_address"] == ["10.20.0.0/16"])
         // Apps + ports + network → AND of three groups; limited to a
         // network, it never sees a ping, so no refusal before it.
         #expect(rules[8]["mode"] == "and")

@@ -83,6 +83,7 @@ import VPNCore
     }
 
     func names(_ dir: URL, _ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".names.srs") }
+    func addrs(_ dir: URL, _ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".addrs") }
 
     /// Sites and addresses in one list: its sites alone, apart, for DNS.
     /// When it holds only sites again, the list itself does.
@@ -94,14 +95,42 @@ import VPNCore
         #expect(await store.local([Self.text])[Self.text]?.namesPath == names(dir, Self.text).path)
         let src = try #require(String(data: try Data(contentsOf: names(dir, Self.text)).dropFirst(4), encoding: .utf8))
         #expect(src.contains("example.com") && !src.contains("10.0.0.0"))
+        // Its addresses apart too, for macOS's routes and the kill switch.
+        #expect(await store.local([Self.text])[Self.text]?.addresses == [IPNetwork("10.0.0.0/8")!])
+        #expect(try String(contentsOf: addrs(dir, Self.text), encoding: .utf8) == "10.0.0.0/8")
         // Not taken for something an earlier build left.
         await store.removeLegacy()
         #expect(FileManager.default.fileExists(atPath: names(dir, Self.text).path))
+        #expect(FileManager.default.fileExists(atPath: addrs(dir, Self.text).path))
 
         server.answers[Self.text] = (200, Data("example.com\n".utf8))
         await store.update([Self.text], olderThan: 0)
         #expect(await store.local([Self.text])[Self.text]?.namesPath == file(dir, Self.text).path)
         #expect(!FileManager.default.fileExists(atPath: names(dir, Self.text).path))
+        #expect(await store.local([Self.text])[Self.text]?.addresses == [])
+        #expect(!FileManager.default.fileExists(atPath: addrs(dir, Self.text).path))
+    }
+
+    /// Addresses tied to a port: only sing-box can match them, so none are
+    /// given out (the route stays with sing-box).
+    @Test func addressesTiedToAPortAreNotGivenOut() async throws {
+        let server = Server()
+        server.answers[Self.a] = (200, Data(#"{"version":3,"rules":[{"ip_cidr":["10.0.0.0/8"],"port":[443]}]}"#.utf8))
+        let (store, dir) = try make(server)
+        await store.update([Self.a], olderThan: 0)
+        let local = try #require(await store.local([Self.a])[Self.a])
+        #expect(local.addresses == nil)
+        #expect(!FileManager.default.fileExists(atPath: addrs(dir, Self.a).path))
+    }
+
+    /// What reaches pf and the routes is read back through the parser.
+    @Test func aDamagedAddressFileGivesNone() async throws {
+        let server = Server()
+        server.answers[Self.text] = (200, Data("example.com\n10.0.0.0/8\n".utf8))
+        let (store, dir) = try make(server)
+        await store.update([Self.text], olderThan: 0)
+        try Data("10.0.0.0/8\npass all".utf8).write(to: addrs(dir, Self.text))
+        #expect(await store.local([Self.text])[Self.text]?.addresses == nil)
     }
 
     /// A list an earlier helper kept: no part in choosing the DNS server
@@ -118,8 +147,11 @@ import VPNCore
         try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: file(dir, Self.text).path)
         #expect(await store.local([Self.text])[Self.text]?.namesPath == nil)
 
+        #expect(await store.local([Self.text])[Self.text]?.addresses == nil)
+
         await store.upgrade()
         #expect(await store.local([Self.text])[Self.text]?.namesPath == names(dir, Self.text).path)
+        #expect(await store.local([Self.text])[Self.text]?.addresses == [IPNetwork("10.0.0.0/8")!])
         #expect(server.requests.isEmpty)
         let updated = try #require(await store.info([Self.text])[0].updated)
         #expect(abs(updated.timeIntervalSince(old)) < 1)

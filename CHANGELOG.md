@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.4-beta
+
+Replaces 1.7.3-beta, which was withdrawn: with a route that sends a country's addresses direct it could not connect. sing-box needs a few seconds to set up that many routes, and the app checked the servers before it was done; it now waits for sing-box to finish starting.
+
+- **No more leaks from torrent clients and calls on split routes.** sing-box decided a UDP socket by the first address it sent to; a program talking to many hosts from one socket sent everything direct if the first host was one a route sends direct. A route that sends addresses direct for every app is now left to macOS's routing table, which decides each packet on its own; the kill switch lets exactly those addresses out.
+- Sites of routes through servers above such a route get stand-in addresses, so they keep their route whatever their real address.
+- Emergency Restore removes every route a killed sing-box left behind.
+
 ## 1.7.2-beta
 
 - **Torrent clients no longer freeze the app.** A program connecting to the tunnel's own address sent the connection round in a loop, thousands of times a second; such connections are now refused.

@@ -37,6 +37,39 @@ import Testing
         #expect(log.filter { $0 == "pf.enable" }.count == 1)
     }
 
+    /// sing-box opens its API last, after its routes (tens of thousands of
+    /// them for a country's addresses): the servers are asked only then,
+    /// or every one of them looks dead.
+    @Test func serversAreAskedOnceSingBoxHasStarted() async throws {
+        let h = Harness()
+        await h.world.set { $0.readyAfterAsks = 3 }
+        try await h.controller.start()
+        #expect(await h.controller.status.phase == .connected)
+        let log = await h.world.log
+        #expect(log.filter { $0 == "engine.notReady" }.count == 3)
+        #expect(log.lastIndex(of: "engine.notReady")! < log.firstIndex(of: "engine.health")!)
+    }
+
+    /// A route direct by address: sing-box's TUN leaves the addresses out of
+    /// its routes and the kill switch lets the same ones out, once the
+    /// tunnel is up. Routes a killed sing-box left go before it starts.
+    @Test func directAddressesAgreeBetweenRoutesAndKillSwitch() async throws {
+        let h = Harness()
+        var p = await h.controller.profile
+        p.routes.insert(Route(name: "Home", conditions: Conditions(destinations: [.cidr(IPNetwork("198.51.100.0/24")!)]),
+                              target: .direct), at: 0)
+        try await h.controller.update(profile: p)
+        try await h.controller.start()
+        let config = try #require(await h.world.lastConfig)
+        let tun = try #require(((try JSONSerialization.jsonObject(with: config) as? [String: Any])?["inbounds"] as? [[String: Any]])?.first)
+        #expect(tun["route_exclude_address"] as? [String] == ["198.51.100.0/24"])
+        let rules = try #require(await h.world.anchorRules)
+        #expect(rules.contains("table <silentroute-direct> const { \\\n  198.51.100.0/24 }"))
+        let log = await h.world.log
+        let stale = try #require(log.firstIndex(of: "net.staleRoutes"))
+        #expect(stale < log.firstIndex { $0.hasPrefix("engine.launch") }!)
+    }
+
     /// No kill switch anywhere: the network is never blocked, not even
     /// while the servers are being proven.
     @Test func startWithoutKillSwitchNeverBlocks() async throws {
@@ -65,7 +98,7 @@ import Testing
     /// A failed start ends with the network as it was: checks that fail
     /// before anything runs never touch pf; a failure behind the block
     /// lifts it again.
-    @Test(arguments: ["check", "launch", "dies", "noTun", "unhealthy", "foreign"])
+    @Test(arguments: ["check", "launch", "dies", "noTun", "notReady", "unhealthy", "foreign"])
     func failedStartLeavesTheNetworkAsItWas(failure: String) async {
         let h = Harness()
         await h.world.set { w in
@@ -74,6 +107,7 @@ import Testing
             case "launch": w.launchFails = true
             case "dies": w.dieRightAfterLaunch = true
             case "noTun": w.tunAppears = false
+            case "notReady": w.readyAfterAsks = .max
             case "unhealthy": w.healthy = false
             default: w.foreign = "utun3 (other VPN)"
             }
@@ -160,7 +194,7 @@ import Testing
     @Test func stopDuringStart() async throws {
         let h = Harness()
         await h.world.set { $0.tunAppears = false }
-        h.clock.realDelay = .milliseconds(20)       // start now waits ~1 s for the interface
+        h.clock.realDelay = .milliseconds(20)       // start now waits ~2 s for the interface
         let starting = Task { try? await h.controller.start() }
         #expect(await h.waitWorld { $0.log.contains { $0.hasPrefix("engine.launch") } })
         await h.controller.stop()

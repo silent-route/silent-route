@@ -45,7 +45,9 @@ struct ProfileEditor: View {
         return { urls, update in try await model.ruleLists(urls, update: update) }
     }
     private var isActive: Bool { saved.id == model.library.activeID }
-    private var issues: [Validation.Issue] { Validation.check(draft) }
+    private var issues: [Validation.Issue] { Validation.check(draft, listsWithAddresses: listsWithAddresses) }
+    /// The profile's lists that hold networks, as the helper has them.
+    @State private var listsWithAddresses: Set<String> = []
     /// Live state belongs to the profile that is running.
     private var running: Bool { isActive && model.status.phase == .connected && !model.otherUsersVPN }
 
@@ -58,7 +60,8 @@ struct ProfileEditor: View {
                     Group {
                         switch section {
                         case .routes: RoutesSection(profile: $draft, liveServers: running ? model.status.servers : [],
-                                                    liveRoutes: running ? model.status.routes : [])
+                                                    liveRoutes: running ? model.status.routes : [],
+                                                    listsWithAddresses: listsWithAddresses)
                         case .servers: ServersSection(check: helperCheck, profile: $draft, live: running ? model.status.servers : [],
                                                       library: model.helper == .ready ? model.library.servers : nil,
                                                       addToLibrary: model.helper == .ready ? { model.addToLibrary($0) } : nil)
@@ -76,6 +79,13 @@ struct ProfileEditor: View {
         .onChange(of: saved) { old, new in
             // Changed elsewhere (menu bar, CLI): follow it unless mid-edit.
             if draft == old { draft = new }
+        }
+        // Which lists hold networks (for the routes' notes): as the helper
+        // has them; a list not downloaded yet counts once it is.
+        .task(id: draft.lists.map(\.url)) {
+            guard let lookup = helperLists else { listsWithAddresses = []; return }
+            let infos = (try? await lookup(draft.lists.map(\.url), false)) ?? []
+            listsWithAddresses = Set(infos.filter { $0.hasAddresses == true }.map(\.url))
         }
         .background {
             Button("") { Task { await save() } }.keyboardShortcut("s").hidden().disabled(!dirty || !canSave)

@@ -83,6 +83,9 @@
       ],
       "auto_route" : true,
       "mtu" : 9000,
+      "route_exclude_address" : [
+        "10.20.0.0/16"
+      ],
       "stack" : "gvisor",
       "tag" : "tun-in",
       "type" : "tun"
@@ -261,21 +264,10 @@
       },
       {
         "action" : "route",
-        "mode" : "or",
-        "outbound" : "direct",
-        "rules" : [
-          {
-            "ip_cidr" : [
-              "10.20.0.0/16"
-            ]
-          },
-          {
-            "domain_suffix" : [
-              "corp.example"
-            ]
-          }
+        "domain_suffix" : [
+          "corp.example"
         ],
-        "type" : "logical"
+        "outbound" : "direct"
       },
       {
         "action" : "route",

@@ -158,6 +158,34 @@ public enum RuleLists {
     /// The rule-set tag of a list's names alone (`Names.part`). Not
     /// `list-…`: no list name can make it.
     public static func namesTag(_ name: String) -> String { "names-" + tag(name) }
+
+    /// A list's addresses, for macOS's routing table and the kill switch
+    /// (`SingBoxConfig.systemDirect`): its networks when each one matches
+    /// on its own, whatever else the list holds. Nil when an address is
+    /// tied to something only sing-box can check (a port, an inverted or a
+    /// logical rule, the local network): such a list is left to sing-box.
+    public static func addresses(_ source: Data) -> [IPNetwork]? {
+        guard let obj = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
+              let rules = obj["rules"] as? [[String: Any]] else { return nil }
+        func has(_ r: [String: Any], _ fields: [String]) -> Bool {
+            fields.contains { r[$0] != nil } || ((r["rules"] as? [[String: Any]])?.contains { has($0, fields) } ?? false)
+        }
+        var out: [IPNetwork] = []
+        for r in rules where has(r, addressFields) {
+            // sing-box matches any of a plain rule's names and networks:
+            // its networks alone are then exactly what it matches by address.
+            let plain = (r["type"] as? String ?? "default") == "default" && r["invert"] as? Bool != true
+            let fields = Set(r.keys).subtracting(["type", "invert"])
+            // One network is written as a string, several as a list.
+            guard plain, r["ip_is_private"] == nil, fields.isSubset(of: Set(nameFields + ["ip_cidr"])),
+                  let cidrs = r["ip_cidr"] as? [String] ?? (r["ip_cidr"] as? String).map({ [$0] }) else { return nil }
+            for c in cidrs {
+                guard let n = IPNetwork(c) else { return nil }
+                out.append(n)
+            }
+        }
+        return out
+    }
 }
 
 /// One list, as the helper reports it.
@@ -169,12 +197,16 @@ public struct RuleListInfo: Codable, Hashable, Sendable, Identifiable {
     public var updated: Date?
     /// Why the last attempt failed, if it did.
     public var error: String?
+    /// Whether it holds networks macOS can route (`RuleLists.addresses`);
+    /// nil: not known.
+    public var hasAddresses: Bool?
     public var id: String { url }
 
-    public init(url: String, bytes: Int? = nil, updated: Date? = nil, error: String? = nil) {
+    public init(url: String, bytes: Int? = nil, updated: Date? = nil, error: String? = nil, hasAddresses: Bool? = nil) {
         self.url = url
         self.bytes = bytes
         self.updated = updated
         self.error = error
+        self.hasAddresses = hasAddresses
     }
 }

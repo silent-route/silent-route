@@ -31,6 +31,8 @@ public protocol Engine: Sendable {
     /// SIGTERM, then SIGKILL after a grace period; returns when it is gone.
     func terminate(pid: Int32) async
     func isRunning(pid: Int32) async -> Bool
+    /// sing-box has finished starting: its API answers, which it opens last.
+    func isReady() async -> Bool
     /// Point a selector at one of its members (clash API).
     func select(_ selector: String, member: String) async throws
     /// Round trip of a test request through one outbound, in milliseconds;
@@ -46,9 +48,13 @@ public protocol NetworkInspector: Sendable {
     /// pf blocks traffic outside our anchor: most likely another VPN's kill
     /// switch, which drops the way to our servers too.
     func foreignFirewall() async -> Bool
-    /// Panic cleanup: put the default route back on a physical gateway if it
-    /// still points at a dead tunnel, and flush the DNS cache.
+    /// Panic cleanup: sing-box's routes go, the default route back on a
+    /// physical gateway if it still points at a dead tunnel, and the DNS
+    /// cache is flushed.
     func restoreRouting() async
+    /// Before sing-box starts, with no TUN of ours up: routes a sing-box
+    /// killed outright left behind go (`TunnelRoutes`).
+    func removeStaleTunnelRoutes() async
     /// While connected: macOS's resolver points into sing-box. With
     /// `local`, each network service gets its own interface address (where
     /// sing-box answers on port 53), so queries macOS scopes to an interface

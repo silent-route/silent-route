@@ -35,6 +35,8 @@ ip_now() { curl -s -m 10 https://ipinfo.io/ip 2>/dev/null; }
 reach_phys() { curl -s -o /dev/null --interface "$IFACE" -m "${2:-6}" -w '%{http_code}' "$1" 2>/dev/null | grep -qv '^000$'; }
 reach()  { curl -s -o /dev/null -m "${2:-6}" -w '%{http_code}' "$1" 2>/dev/null | grep -qv '^000$'; }
 sb_pid() { pgrep -f "^$SB_BIN run" | head -1; }
+# Routes through the TUN's own address: sing-box's (docs/network.md).
+our_routes() { netstat -rn | awk '$2 == "172.19.0.5" || $2 == "fdfe:dcba:9876::5"' | grep -c .; }
 
 # Counts packets on the physical interface matching a filter while a
 # command runs. Anything above zero leaked past the tunnel.
@@ -102,6 +104,49 @@ n=$(count_on_phys "port 53" sh -c 'for d in example.com wikipedia.org github.com
 n=$(count_on_phys "ip6 and not (net fe80::/10 or net ff00::/8)" curl -s -6 -m 5 https://ipv6.google.com)
 [ "$n" = 0 ] && ok "no IPv6 outside the tunnel" || bad "$n IPv6 packets on $IFACE"
 
+step "3b. direct by address (only if a route sends addresses direct)"
+FIRST_DIRECT=$(python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); t=[i for i in c["inbounds"] if i["type"]=="tun"][0]; print(next((a.split("/")[0] for a in t.get("route_exclude_address",[]) if ":" not in a and not a.startswith(("10.","192.168.","172."))), ""))' \
+  "/Library/Application Support/Silent Route/run/config.json" 2>/dev/null)
+if [ -z "$FIRST_DIRECT" ]; then
+  echo "  (the active profile has no such route: skipped)"
+else
+  n=$(our_routes)
+  [ "$n" -gt 100 ] && ok "the tunnel takes the rest of the internet in $n routes" || bad "only $n routes through the tunnel"
+  [ "$(route -n get "$FIRST_DIRECT" | awk '/interface:/ {print $2}')" = "$IFACE" ] \
+    && ok "$FIRST_DIRECT goes by $IFACE" || bad "$FIRST_DIRECT does not go by $IFACE"
+  [ "$(route -n get 1.1.1.1 | awk '/interface:/ {print $2}')" != "$IFACE" ] \
+    && ok "1.1.1.1 still goes into the tunnel" || bad "1.1.1.1 goes by $IFACE"
+  # One UDP socket: first to a direct address, then to a STUN server, which
+  # says what address it sees. It must be the tunnel's, as for a socket
+  # that never sent anything direct — sing-box once sent such a socket's
+  # whole traffic direct.
+  STUN=$(mktemp)
+  cat > "$STUN" <<'PY'
+import os, socket, struct, sys
+def stun(s):
+    tid = os.urandom(12)
+    s.sendto(struct.pack(">HHI", 1, 0, 0x2112A442) + tid, (socket.gethostbyname("stun.cloudflare.com"), 3478))
+    s.settimeout(6)
+    d, _ = s.recvfrom(2048)
+    i = 20
+    while i < len(d):
+        t, l = struct.unpack(">HH", d[i:i+4]); v = d[i+4:i+4+l]
+        if t == 0x20: return socket.inet_ntoa(bytes(a ^ b for a, b in zip(v[4:8], struct.pack(">I", 0x2112A442))))
+        i += 4 + l + (-l % 4)
+fresh = stun(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.sendto(b"x", (sys.argv[1], 9))
+print(fresh, stun(s))
+PY
+  read -r FRESH AFTER <<< "$(python3 -I "$STUN" "$FIRST_DIRECT" 2>/dev/null)"
+  rm -f "$STUN"
+  if [ -n "$AFTER" ] && [ "$AFTER" = "$FRESH" ] && [ "$AFTER" != "$DIRECT" ]; then
+    ok "a socket that first went direct still sends the rest through the tunnel"
+  else
+    bad "after a direct packet the STUN server saw '$AFTER' (tunnel: '$FRESH', direct: $DIRECT)"
+  fi
+fi
+
 step "4. sing-box killed: the kill switch must hold"
 kill -9 "$(sb_pid)" 2>/dev/null
 sleep 1
@@ -127,6 +172,7 @@ step "6. disconnect: the network must be exactly as before"
 [ -z "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && ok "kill switch removed" || bad "rules left in $ANCHOR"
 [ -z "$(sb_pid)" ] && ok "sing-box stopped" || bad "sing-box still running"
 ifconfig | grep -q 'inet 172.19.0.5 ' && bad "TUN interface left behind" || ok "TUN interface gone"
+[ "$(our_routes)" = 0 ] && ok "no routes into the tunnel left" || bad "$(our_routes) routes into the tunnel left"
 [ "$(ip_now)" = "$DIRECT" ] && ok "direct internet back ($DIRECT)" || bad "after down the exit address is '$(ip_now)'"
 reach_phys https://1.1.1.1 6 && ok "requests bound to $IFACE work again" || bad "requests bound to $IFACE still blocked"
 
@@ -135,6 +181,7 @@ step "7. panic from connected"
 "$SROUTE" panic >/dev/null
 [ -z "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && ok "panic removed the kill switch" || bad "rules left in $ANCHOR after panic"
 [ -z "$(sb_pid)" ] && ok "panic stopped sing-box" || bad "sing-box still running after panic"
+[ "$(our_routes)" = 0 ] && ok "panic left no routes into the tunnel" || bad "$(our_routes) routes into the tunnel left after panic"
 reach https://ipinfo.io 8 && ok "network works after panic" || bad "no internet after panic"
 
 step "helper log"

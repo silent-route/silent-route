@@ -16,6 +16,7 @@ Everything Silent Route sends or lets through, by whom, where to, and when. It c
 | What | From → to | Path | When |
 |---|---|---|---|
 | Your apps' traffic | Any app → sites and services | Into the tunnel interface, then by your routes: through a server, direct, or blocked | VPN on |
+| Your apps' traffic to addresses a route sends direct | Any app → those addresses | Direct, by macOS's routing table (see [Direct by address](#direct-by-address)) | VPN on, while the tunnel is up |
 | Your apps' DNS | macOS resolver → sing-box on this Mac's port 53 (each network service's own address; `172.19.0.6` inside the tunnel if port 53 is taken) | By the profile's DNS rules (see [DNS](#dns)) | VPN on |
 | A route's DNS | sing-box → the profile's DNS-over-HTTPS server (default `1.1.1.1:443`) | Through that route's server, so a name is looked up where its traffic goes | Names of routes that go through servers, and of *Everything else* |
 | Direct DNS | sing-box → the profile's direct resolver (default `1.1.1.1:53`, UDP) | Direct | Names of routes that go direct, *Always resolved directly* zones, and your servers' own host names |
@@ -40,8 +41,21 @@ While any route through servers has its kill switch on, pf (macOS's packet filte
 3. **DHCP**, so the Mac keeps its address on the network.
 4. **The local network** (printers, AirDrop, a NAS), if the profile allows it. **DNS (ports 53 and 853) to the local network is the exception**: only sing-box may ask the router, so nothing else can show it the names you look up.
 5. **IPv6 link-local and multicast** (needed by macOS for the local network), and **unique local IPv6** (`fd…` — a NAS or home server) if the profile allows the local network; again without DNS.
+6. **The addresses a route sends direct** (see below), while the tunnel is up; again without DNS. While it is coming back, they are blocked like everything else.
 
 Everything else is dropped. Blocking starts the moment you turn the VPN on — before sing-box runs — and the servers are proven behind it, so nothing goes out past the tunnel while it connects. If the VPN cannot connect, the block is lifted and the network is as it was. It stays on while sing-box restarts, so nothing slips out during a reconnect. Only routes that are turned on count: a kill switch on a route that is off blocks nothing, and with no kill switch on any active route the network is never blocked. pf is changed only through Silent Route's own anchor (`com.apple/silentroute`); the system's rules and other VPNs' rules are never touched.
+
+## Direct by address
+
+A route that sends addresses direct for every app, port and protocol (a country's networks, typed networks) is left to macOS's routing table. sing-box's tunnel takes the rest of the internet, piece by piece (tens of thousands of routes for a country), and the kernel decides every packet by where it goes.
+
+Why: sing-box decides a UDP socket once, by the first address it sends to, and sends the rest of it the same way. A torrent client or a call talks to many hosts from one socket; if the first was such an address, everything it sent afterwards went direct, past the tunnel, to hosts the routes send through servers. The routing table has no such memory.
+
+- **The addresses** come from the lists' networks (the helper keeps them apart, like the sites for DNS), and from networks typed into the route. A list whose networks only sing-box can match (tied to a port, inverted) leaves the route with sing-box. A route's sites stay with sing-box either way.
+- **Routes above it win, as before**: addresses that a route above through servers or blocked claims are taken out. Sites of routes through servers above it get stand-in addresses (`198.18.0.0/15`, living a second) from sing-box's DNS, so their traffic comes into the tunnel whatever their real address is. Routes above by app cannot be honoured: macOS does not know apps. The app says so under the route.
+- **One snapshot per start.** The tunnel's routes and the kill switch take the same addresses, read when sing-box starts; an updated list applies at the next connect.
+- **Clean-up.** sing-box removes its routes when it stops, and they go with its interface. If it was killed and some stay, they are removed before the next start and by Emergency Restore, through the kernel's routing socket, by their gateway (the tunnel's own address, which no other VPN uses).
+- This traffic does not pass sing-box, so it is not in Monitor.
 
 ## DNS
 
@@ -63,6 +77,7 @@ How sing-box answers each name:
 | Matching a route that goes through servers | The profile's DoH server | Through that route's server |
 | Matching a route that goes direct, or an *Always resolved directly* zone | The profile's direct resolver | Direct |
 | Matching a blocked route | Not resolved | — |
+| Matching a route through servers above a route direct by address | sing-box itself: a stand-in address | Into the tunnel, then by its route (see above) |
 | Anything else | Like *Everything else* | Its server, or direct |
 | A server's own host name | The profile's direct resolver | Direct (a tunnel cannot resolve its own server) |
 

@@ -45,9 +45,13 @@ public enum SingBoxConfig {
         /// server a name is asked of. `path` itself when the list has
         /// nothing else; nil when it has no names (`RuleLists.Names`).
         public var namesPath: String?
-        public init(path: String, namesPath: String?) {
+        /// Its addresses (`RuleLists.addresses`); nil when they cannot be
+        /// taken apart from it.
+        public var addresses: [IPNetwork]?
+        public init(path: String, namesPath: String?, addresses: [IPNetwork]? = nil) {
             self.path = path
             self.namesPath = namesPath
+            self.addresses = addresses
         }
     }
 
@@ -113,6 +117,11 @@ public enum SingBoxConfig {
     /// ever — a program connecting to itself on that address (a torrent
     /// client does) once made thousands of connections a second.
     static let tunNetworks = ["172.19.0.4/30", "fdfe:dcba:9876::4/126"]
+    /// Where the names of routes through servers above a route macOS sends
+    /// direct get their addresses (`faked`): benchmark space (RFC 2544),
+    /// which no site has.
+    public static let fakeIPRange = "198.18.0.0/15"
+    static let fakeIPTag = "fakeip"
 
     // MARK: - Full config
 
@@ -126,6 +135,8 @@ public enum SingBoxConfig {
         guard errors.isEmpty else { throw .invalidProfile(errors.map(\.message)) }
         let routes = profile.routes.filter(\.enabled)
         let def = profile.defaultRoute
+        let system = systemRoutes(routes, profile, env)
+        let fakedRoutes = faked(routes, system)
 
         // Outbounds: every server; per route that uses servers a selector
         // over them; direct.
@@ -167,7 +178,24 @@ public enum SingBoxConfig {
         }
         for r in routes {
             if let refusal = refusal(r, in: profile) { routeRules.append(refusal) }
-            routeRules.append(routeRule(r))
+            if system[r.id] != nil {
+                // Its addresses never reach sing-box: macOS sends them
+                // direct. What still comes into the tunnel for one of them —
+                // from a socket bound to the tunnel's own address — goes the
+                // way of the rest of that socket's traffic, never out past
+                // it. Its sites stay here.
+                var names = r
+                names.conditions.destinations = r.conditions.destinations.filter {
+                    if case .cidr = $0 { return false }
+                    if case .list(let n) = $0 { return namesSet(n, profile, env) != nil }
+                    return true
+                }
+                if !names.conditions.destinations.isEmpty {
+                    routeRules.append(routeRule(names, listTag: { namesSet($0, profile, env)?.tag }))
+                }
+            } else {
+                routeRules.append(routeRule(r))
+            }
         }
         var final = directTag
         switch def.target {
@@ -184,20 +212,26 @@ public enum SingBoxConfig {
             routeRules.append(["inbound": [.string(tunTag)], "action": "route", "outbound": .string(final), "tls_fragment": true])
         }
 
-        // The lists actually referenced, each as its compiled file.
+        // The lists actually referenced, each as its compiled file; of a
+        // route macOS sends direct, its names alone.
         var ruleSets: [JSON] = []
+        func addSet(_ tag: String, _ path: String) {
+            guard !ruleSets.contains(where: { $0["tag"] == .string(tag) }) else { return }
+            ruleSets.append(["type": "local", "tag": .string(tag), "format": "binary", "path": .string(path)])
+        }
         for name in usedLists(routes) {
             guard let url = profile.lists.first(where: { $0.name == name })?.url, let file = env.lists[url] else {
                 throw .listMissing(name)
             }
-            ruleSets.append(["type": "local", "tag": .string(RuleLists.tag(name)), "format": "binary", "path": .string(file.path)])
+            if routes.contains(where: { r in system[r.id] == nil && r.conditions.destinations.contains(.list(name)) }) {
+                addSet(RuleLists.tag(name), file.path)
+            }
         }
         // The names alone of mixed lists, for the DNS rules (see `dns`).
-        for r in routes where mirroredInDNS(r) {
+        for r in routes where mirroredInDNS(r) || system[r.id] != nil || fakedRoutes.contains(r.id) {
             for case .list(let name) in r.conditions.destinations {
-                guard let names = namesSet(name, profile, env), names.tag != RuleLists.tag(name),
-                      !ruleSets.contains(where: { $0["tag"] == .string(names.tag) }) else { continue }
-                ruleSets.append(["type": "local", "tag": .string(names.tag), "format": "binary", "path": .string(names.path)])
+                guard let names = namesSet(name, profile, env) else { continue }
+                addSet(names.tag, names.path)
             }
         }
 
@@ -209,17 +243,28 @@ public enum SingBoxConfig {
             "find_process": true,
         ]
         if !ruleSets.isEmpty { route["rule_set"] = .array(ruleSets) }
+        var tun: [String: JSON] = [
+            "type": "tun", "tag": .string(tunTag),
+            "address": [.string(tunAddress4), .string(tunAddress6)],
+            "mtu": .int(profile.mtu ?? 9000),
+            "auto_route": true,
+            "stack": "gvisor",
+        ]
+        // Left out of the TUN's routes: macOS sends them by its own.
+        let excluded = union(system)
+        if !excluded.isEmpty { tun["route_exclude_address"] = .strings(excluded.map(\.description)) }
+        var cacheFile: [String: JSON] = ["enabled": true, "path": .string(env.cacheFile)]
+        // Apps keep a fake address for as long as its name's answer lives:
+        // sing-box must still know it after a restart.
+        let dnsConfig = dns(profile, routes: routes, env: env, faked: fakedRoutes)
+        if case .array(let servers)? = dnsConfig["servers"], servers.contains(where: { $0["type"] == "fakeip" }) {
+            cacheFile["store_fakeip"] = true
+        }
 
         return [
             "log": ["level": .string(env.logLevel), "timestamp": true],
-            "dns": dns(profile, routes: routes, env: env),
-            "inbounds": .array([[
-                "type": "tun", "tag": .string(tunTag),
-                "address": [.string(tunAddress4), .string(tunAddress6)],
-                "mtu": .int(profile.mtu ?? 9000),
-                "auto_route": true,
-                "stack": "gvisor",
-            ]] + (env.captive.map { c -> [JSON] in [[
+            "dns": dnsConfig,
+            "inbounds": .array([.object(tun)] + (env.captive.map { c -> [JSON] in [[
                 "type": "mixed", "tag": .string(captiveTag),
                 "listen": "127.0.0.1", "listen_port": .int(Int(c.port)),
                 "users": [["username": .string(c.username), "password": .string(c.password)]],
@@ -230,13 +275,90 @@ public enum SingBoxConfig {
             "outbounds": .array(outbounds),
             "route": .object(route),
             "experimental": [
-                "cache_file": ["enabled": true, "path": .string(env.cacheFile)],
+                "cache_file": .object(cacheFile),
                 "clash_api": [
                     "external_controller": .string("127.0.0.1:\(env.clashAPIPort)"),
                     "secret": .string(env.clashAPISecret),
                 ],
             ],
         ]
+    }
+
+    // MARK: - Direct by macOS
+
+    /// The addresses of a route that goes direct for every app, port and
+    /// protocol: macOS sends them past the tunnel itself, deciding each
+    /// packet by where it goes. sing-box decides a UDP socket once, by the
+    /// first address it sends to, and a torrent client or a call talks to
+    /// many from one socket: all of it would go the way of whichever came
+    /// first, out past the tunnel too. Nil: the route stays with sing-box
+    /// (it has no addresses, or a list's cannot be taken apart from it).
+    static func systemDirect(_ r: Route, _ profile: Profile, _ env: Environment) -> [IPNetwork]? {
+        guard case .direct = r.target, r.enabled, r.conditions.apps.isEmpty, r.conditions.ports.isEmpty,
+              r.conditions.network == nil else { return nil }
+        var out: [IPNetwork] = []
+        for d in r.conditions.destinations {
+            switch d {
+            case .cidr(let n): out.append(n)
+            case .list(let name):
+                guard let url = profile.lists.first(where: { $0.name == name })?.url,
+                      let addresses = env.lists[url]?.addresses else { return nil }
+                out += addresses
+            default: break
+            }
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// What macOS sends direct, by route: each such route's addresses but
+    /// those a route above it claims (through servers or blocked) — the
+    /// first route that matches still wins. Below a route whose list's
+    /// addresses are not known, none: they could be any.
+    static func systemRoutes(_ routes: [Route], _ profile: Profile, _ env: Environment) -> [UUID: [IPNetwork]] {
+        var out: [UUID: [IPNetwork]] = [:]
+        var claimed: [IPNetwork] = []
+        for r in routes {
+            if let own = systemDirect(r, profile, env) {
+                let left = own.flatMap { n in claimed.reduce([n]) { pieces, c in pieces.flatMap { $0.subtracting(c) } } }
+                if !left.isEmpty { out[r.id] = left }
+            }
+            if case .direct = r.target { continue }
+            for d in r.conditions.destinations {
+                switch d {
+                case .cidr(let n): claimed.append(n)
+                case .list(let name):
+                    guard let url = profile.lists.first(where: { $0.name == name })?.url,
+                          let addresses = env.lists[url]?.addresses else { return out }
+                    claimed += addresses
+                default: break
+                }
+            }
+        }
+        return out
+    }
+
+    static func union(_ system: [UUID: [IPNetwork]]) -> [IPNetwork] {
+        Set(system.values.joined()).sorted { a, b in
+            if a.bytes.count != b.bytes.count { return a.bytes.count < b.bytes.count }
+            if a.bytes != b.bytes { return a.bytes.lexicographicallyPrecedes(b.bytes) }
+            return a.prefix < b.prefix
+        }
+    }
+
+    /// Every address macOS sends direct with this profile: the TUN leaves
+    /// them out of its routes, and the kill switch lets them out. The two
+    /// must agree; both come from here.
+    public static func directAddresses(_ profile: Profile, env: Environment) -> [IPNetwork] {
+        union(systemRoutes(profile.routes.filter(\.enabled), profile, env))
+    }
+
+    /// Routes through servers above a route macOS sends direct. Their names
+    /// get fake addresses (`fakeIPRange`), so whatever address a name
+    /// really has, its traffic comes into the tunnel and sing-box routes it
+    /// by its name — before macOS could send it direct by the real one.
+    static func faked(_ routes: [Route], _ system: [UUID: [IPNetwork]]) -> Set<UUID> {
+        guard let last = routes.lastIndex(where: { system[$0.id] != nil }) else { return [] }
+        return Set(routes[..<last].compactMap { r in if case .servers = r.target { r.id } else { nil } })
     }
 
     /// A route whose sites also decide which DNS server their names are
@@ -294,7 +416,7 @@ public enum SingBoxConfig {
         String(net.description.split(separator: "/")[0])
     }
 
-    static func dns(_ profile: Profile, routes: [Route], env: Environment) -> JSON {
+    static func dns(_ profile: Profile, routes: [Route], env: Environment, faked: Set<UUID> = []) -> JSON {
         var servers: [JSON] = [
             ["type": "udp", "tag": .string(dnsDirect), "server": .string(address(profile.dns.directServer))],
             // The network's own resolver (the router), as DHCP gives it for
@@ -320,7 +442,7 @@ public enum SingBoxConfig {
         // A route's sites are mirrored (see `mirroredInDNS`), lists by their
         // names alone. Its apps do not matter — its sites match from any
         // app (and the query comes from mDNSResponder anyway).
-        for r in routes where mirroredInDNS(r) {
+        for r in routes where mirroredInDNS(r) || faked.contains(r.id) {
             var domains = domainFields(r.conditions.destinations)
             let sites = r.conditions.destinations.compactMap { d -> String? in
                 guard case .list(let n) = d else { return nil }
@@ -328,6 +450,28 @@ public enum SingBoxConfig {
             }
             if !sites.isEmpty { domains["rule_set"] = .strings(sites) }
             guard !domains.isEmpty else { continue }
+            if faked.contains(r.id) {
+                // Fake addresses (see `faked`), living a second, so nothing
+                // keeps one long after the VPN is off. Records that carry
+                // real addresses as hints (HTTPS, SVCB) are answered empty:
+                // a browser then asks for the address and gets the fake one.
+                if !servers.contains(where: { $0["tag"] == .string(fakeIPTag) }) {
+                    servers.append(["type": "fakeip", "tag": .string(fakeIPTag), "inet4_range": .string(fakeIPRange)])
+                }
+                var fake = domains
+                fake["query_type"] = ["A", "AAAA"]
+                fake["action"] = "route"
+                fake["server"] = .string(fakeIPTag)
+                fake["rewrite_ttl"] = 1
+                dnsRules.append(.object(fake))
+                var hints = domains
+                hints["query_type"] = ["HTTPS", "SVCB"]
+                hints["action"] = "predefined"
+                hints["rcode"] = "NOERROR"
+                dnsRules.append(.object(hints))
+                // Anything else about it (a mail or text record) as before.
+                guard mirroredInDNS(r) else { continue }
+            }
             var rule = domains
             switch r.target {
             case .direct: rule["server"] = .string(dnsDirect)
@@ -384,7 +528,8 @@ public enum SingBoxConfig {
     /// its own (OR); ports and protocol narrow that down (AND). Explicit
     /// logical rules, so the meaning never depends on sing-box's implicit
     /// field grouping.
-    static func routeRule(_ r: Route) -> JSON {
+    /// - Parameter listTag: the rule-set a list is matched by.
+    static func routeRule(_ r: Route, listTag: (String) -> String? = { RuleLists.tag($0) }) -> JSON {
         var parts: [[String: JSON]] = []
         let c = r.conditions
 
@@ -394,7 +539,7 @@ public enum SingBoxConfig {
             let cidrs = c.destinations.compactMap { if case .cidr(let n) = $0 { n.description } else { nil } }
             if !cidrs.isEmpty { kinds.append(["ip_cidr": .strings(cidrs)]) }
             if c.destinations.contains(.localNetwork) { kinds.append(["ip_is_private": true]) }
-            let geo = c.destinations.compactMap { if case .list(let n) = $0 { RuleLists.tag(n) } else { nil } }
+            let geo = c.destinations.compactMap { if case .list(let n) = $0 { listTag(n) } else { nil } }
             if !geo.isEmpty { kinds.append(["rule_set": .strings(geo)]) }
             for (k, v) in domainFields(c.destinations).sorted(by: { $0.key < $1.key }) { kinds.append([k: v]) }
             what += kinds

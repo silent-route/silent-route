@@ -131,6 +131,31 @@ struct SingBoxCheckTests {
         #expect(!out.contains("WARN") && !out.contains("ERROR") && !out.contains("FATAL"), "sing-box said: \(out)")
     }
 
+    /// A route's addresses left to macOS, fake addresses for the sites
+    /// through a server above it: accepted, and run without a warning.
+    @Test func systemDirectRunsWithoutWarnings() throws {
+        let dir = SingBox.work.appendingPathComponent("run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var env = SystemDirectTests.env(SingBox.env)
+        for (i, list) in Profile.domesticLists.enumerated() {
+            let source = i == 0 ? #"{"version":3,"rules":[{"ip_cidr":["198.51.100.0/24","2001:db8:100::/48"]}]}"#
+                                : #"{"version":3,"rules":[{"domain_suffix":["cn"]}]}"#
+            let json = dir.appendingPathComponent("\(i).json"), srs = dir.appendingPathComponent("\(i).srs")
+            try Data(source.utf8).write(to: json)
+            try SingBox.run(["rule-set", "compile", json.path, "-o", srs.path])
+            env.lists[list.url]?.path = srs.path
+            if i > 0 { env.lists[list.url]?.namesPath = srs.path }
+        }
+        env.clashAPIPort = SingBox.freePort()
+        env.cacheFile = dir.appendingPathComponent("cache.db").path
+        let json = try SingBoxConfig.generate(SystemDirectTests.profile, env: env)
+        #expect(json.text.contains("route_exclude_address") && json.text.contains("\"fakeip\""))
+        try SingBox.check(json)
+        let out = try SingBox.runBriefly(json, in: dir)
+        #expect(!out.contains("WARN") && !out.contains("ERROR") && !out.contains("FATAL"), "sing-box said: \(out)")
+    }
+
     /// The helper's server check, as it runs: no TUN, nothing to swap.
     @Test func probeRunsWithoutWarnings() throws {
         let dir = SingBox.work.appendingPathComponent("run-\(UUID().uuidString)")

@@ -215,6 +215,10 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
         }
     }
 
+    public func isReady() async -> Bool {
+        (try? await request("GET", "/version", timeout: 2))?.0 == 200
+    }
+
     public func delay(_ tag: String) async -> Int? {
         // sing-box itself fetches the URL through that outbound. Up to 10 s:
         // a busy server answering slowly is slow, not dead (it may need most

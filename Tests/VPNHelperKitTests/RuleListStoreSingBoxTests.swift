@@ -60,6 +60,8 @@ struct RuleListStoreSingBoxTests {
             let kept = try source(URL(fileURLWithPath: names))
             #expect(kept.contains(site) && !kept.contains(net), "\(kept)")
             #expect(try source(URL(fileURLWithPath: try #require(local[url]?.path))).contains(net))
+            // Its address apart, for macOS's routes and the kill switch.
+            #expect(local[url]?.addresses == [IPNetwork(net + ".0/24")!])
         }
 
         // The same lists as an earlier helper left them: upgraded from disk.
@@ -71,9 +73,10 @@ struct RuleListStoreSingBoxTests {
         let upgraded = try #require(await store.local([text])[text]?.namesPath)
         let kept = try source(URL(fileURLWithPath: upgraded))
         #expect(kept.contains("a.example") && !kept.contains("203.0.113"))
+        #expect(await store.local([text])[text]?.addresses == [IPNetwork("203.0.113.0/24")!])
         // Nothing left over but the lists.
         let files = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { !$0.hasPrefix(".") }
-        #expect(files.count == 6, "\(files)")
+        #expect(files.count == 8, "\(files)")
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).allSatisfy { !$0.hasPrefix(".") })
     }
 }

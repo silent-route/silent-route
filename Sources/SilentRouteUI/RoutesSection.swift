@@ -8,6 +8,8 @@ struct RoutesSection: View {
     @Binding var profile: Profile
     let liveServers: [ServerState]
     let liveRoutes: [RouteState]
+    /// The lists that hold networks (`RuleListInfo.hasAddresses`).
+    var listsWithAddresses: Set<String> = []
     @State private var editing: EditRequest?
 
     struct EditRequest: Identifiable {
@@ -33,11 +35,11 @@ struct RoutesSection: View {
 
             ForEach(Array(profile.routes.enumerated()), id: \.element.id) { i, r in
                 RouteCard(profile: $profile, route: r, index: i, isDefault: false,
-                          liveServers: liveServers, live: liveRoutes.first { $0.id == r.id },
+                          listsWithAddresses: listsWithAddresses, liveServers: liveServers, live: liveRoutes.first { $0.id == r.id },
                           edit: { editing = EditRequest(route: r, isNew: false) })
             }
             RouteCard(profile: $profile, route: profile.defaultRoute, index: profile.routes.count, isDefault: true,
-                      liveServers: liveServers, live: liveRoutes.first { $0.id == profile.defaultRoute.id },
+                      listsWithAddresses: listsWithAddresses, liveServers: liveServers, live: liveRoutes.first { $0.id == profile.defaultRoute.id },
                       edit: { editing = EditRequest(route: profile.defaultRoute, isNew: false) })
         }
         .sheet(item: $editing) { req in
@@ -64,12 +66,13 @@ struct RouteCard: View {
     let route: Route
     let index: Int
     let isDefault: Bool
+    let listsWithAddresses: Set<String>
     let liveServers: [ServerState]
     let live: RouteState?
     let edit: () -> Void
 
     private var issues: [Validation.Issue] {
-        Validation.check(profile).filter { $0.route == route.id }
+        Validation.check(profile, listsWithAddresses: listsWithAddresses).filter { $0.route == route.id }
     }
 
     var body: some View {

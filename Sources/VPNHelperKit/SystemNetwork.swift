@@ -114,14 +114,20 @@ public struct SystemNetwork: NetworkInspector {
         let repair = Self.needsRouteRepair(routeInterface: iface,
                                            interfaceExists: iface.map { if_nametoindex($0) != 0 } ?? false,
                                            isOurTUN: iface != nil && iface == tun)
+        // sing-box is gone by now (panic stopped it): whatever of its routes
+        // is left leads nowhere.
+        if tun == nil || repair { TunnelRoutes.removeAll() }
         if repair, let gw = Self.physicalGateway() {
-            await Command.run("/sbin/route", ["-n", "delete", "-net", "0.0.0.0/1"])
-            await Command.run("/sbin/route", ["-n", "delete", "-net", "128.0.0.0/1"])
             await Command.run("/sbin/route", ["-n", "delete", "default"])
             await Command.run("/sbin/route", ["-n", "add", "default", gw])
         }
         await Command.run("/usr/bin/dscacheutil", ["-flushcache"])
         await Command.run("/usr/bin/killall", ["-HUP", "mDNSResponder"])
+    }
+
+    public func removeStaleTunnelRoutes() async {
+        guard await tunInterface() == nil else { return }
+        TunnelRoutes.removeAll()
     }
 
     /// Whether panic may rebuild the default route: no route at all, a route

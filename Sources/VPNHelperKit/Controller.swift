@@ -29,7 +29,8 @@ public actor Controller {
 
     public struct Options: Sendable {
         public var singBoxGroup: UInt32
-        public var tunWaitSeconds: Double = 15
+        /// sing-box's start: its interface, routes and API.
+        public var startWaitSeconds: Double = 30
         public var maxBackoffSeconds: Double = 30
         /// sing-box is restarted only after no server has answered for this
         /// long. A restart drops every connection (a call, a download), and
@@ -140,6 +141,10 @@ public actor Controller {
     private var captive = false
     /// That proxy's address and password for the running sing-box.
     private var captiveProxy: SingBoxConfig.LocalProxy?
+    /// The addresses macOS sends direct for the running sing-box: taken with
+    /// its config, so the TUN's routes and the kill switch always agree,
+    /// even when a list is updated meanwhile.
+    private var direct: [IPNetwork] = []
 
     /// When the servers stopped answering, while they still don't.
     private var downSince: Date?
@@ -540,7 +545,7 @@ public actor Controller {
     // MARK: - Internals
 
     private func rules(tun: String?) throws -> String {
-        try PFRules.generate(.init(tunInterface: tun, singBoxGroup: options.singBoxGroup, lan: profile.lan))
+        try PFRules.generate(.init(tunInterface: tun, singBoxGroup: options.singBoxGroup, lan: profile.lan, direct: direct))
     }
 
     private func makeConfig(lists: [String: SingBoxConfig.LocalList]?) throws -> Data {
@@ -558,6 +563,7 @@ public actor Controller {
             env.clashAPIPort = ports[1]
         }
         let data = try SingBoxConfig.generate(profile, env: env).encoded()
+        direct = SingBoxConfig.directAddresses(profile, env: env)
         api = (env.clashAPIPort, env.clashAPISecret)
         captiveProxy = env.captive
         return data
@@ -626,6 +632,9 @@ public actor Controller {
     /// tunnel while its servers are being proven; `start` lifts the block if
     /// the attempt fails. Without a kill switch the network is not touched.
     private func connect(epoch my: Int, keepBlockingOnFailure: Bool) async throws {
+        // Routes a killed sing-box left would lead into nothing, and look
+        // like another VPN's to the check below.
+        await network.removeStaleTunnelRoutes()
         if !keepBlockingOnFailure, let other = await network.foreignTunnel() {
             throw CommandError.failed("Another VPN is active (\(other)). Turn it off first.")
         }
@@ -675,20 +684,26 @@ public actor Controller {
         guard let pid = launched else { return }
         publish()
 
-        // Wait for the TUN interface.
+        // Wait for sing-box to finish starting: its interface, then its API.
+        // The interface comes first, its routes after it (tens of thousands
+        // when macOS sends a country's addresses direct, seconds of work);
+        // the API opens last. Asked before that, every server looks dead.
         var tun: String?
-        let deadline = clock.now().addingTimeInterval(options.tunWaitSeconds)
-        while tun == nil {
+        var ready = false
+        let deadline = clock.now().addingTimeInterval(options.startWaitSeconds)
+        while tun == nil || !ready {
             guard epoch == my else { return }
             guard enginePID == pid, await engine.isRunning(pid: pid) else {
                 enginePID = nil
                 throw CommandError.failed("sing-box exited during start")
             }
-            tun = await network.tunInterface()
-            if tun == nil {
+            if tun == nil { tun = await network.tunInterface() }
+            if tun != nil { ready = await engine.isReady() }
+            if tun == nil || !ready {
                 guard clock.now() < deadline else {
                     await killEngine(pid)
-                    throw CommandError.failed("sing-box did not bring up its interface in time")
+                    throw CommandError.failed(tun == nil ? "sing-box did not bring up its interface in time"
+                                                         : "sing-box did not finish starting in time")
                 }
                 try await clock.sleep(seconds: 0.25)
             }

@@ -42,7 +42,9 @@ public enum Validation {
     /// Address databases and site lists are checked for their form only:
     /// any country or list can be used — one not shipped with the helper is
     /// downloaded by sing-box on first use.
-    public static func check(_ profile: Profile) -> [Issue] {
+    /// - Parameter listsWithAddresses: the addresses (URLs) of the lists
+    ///   that hold networks, as the helper has them.
+    public static func check(_ profile: Profile, listsWithAddresses: Set<String> = []) -> [Issue] {
         var issues: [Issue] = []
         func error(_ m: String, tunnel: UUID? = nil, rule: UUID? = nil) {
             issues.append(Issue(severity: .error, message: m, tunnel: tunnel, rule: rule))
@@ -93,6 +95,25 @@ public enum Validation {
             if !RuleLists.isValidName(l.name) { error("bad list name \"\(l.name)\" (letters, digits and “-”)") }
             if !listNames.insert(l.name).inserted { error("two lists are named \"\(l.name)\"") }
             if !RuleLists.isValidURL(l.url) { error("list \"\(l.name)\": the address must be an https:// link") }
+        }
+
+        // macOS sends a direct route's addresses past the tunnel for every
+        // app (`SingBoxConfig.systemDirect`): a route above it by app does
+        // not hold them back. Said where it is not obvious.
+        var appRouteAbove = false
+        for r in profile.routes where r.enabled {
+            let addresses = r.conditions.destinations.contains {
+                if case .cidr = $0 { return true }
+                if case .list(let n) = $0 { return profile.lists.first { $0.name == n }.map { listsWithAddresses.contains($0.url) } ?? false }
+                return false
+            }
+            if case .direct = r.target {
+                if appRouteAbove, addresses, r.conditions.apps.isEmpty, r.conditions.ports.isEmpty, r.conditions.network == nil {
+                    warn("route \"\(r.name)\": its addresses go direct for every app, also for a route above it by app", rule: r.id)
+                }
+            } else if !r.conditions.apps.isEmpty {
+                appRouteAbove = true
+            }
         }
 
         var routeIDs: Set<UUID> = []

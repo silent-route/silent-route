@@ -5,7 +5,9 @@ import VPNCore
 /// address, is `rules/<key>.srs` (compiled, what sing-box reads) with
 /// `rules/<key>.json` (its address and kind), root's alone, and for a list
 /// of names and addresses `rules/<key>.names.srs`, its names alone, for
-/// the DNS rules (`RuleLists.names`).
+/// the DNS rules (`RuleLists.names`), and for a list with addresses
+/// `rules/<key>.addrs`, one network a line, for macOS's routes and the kill
+/// switch (`RuleLists.addresses`).
 ///
 /// A list is fetched when a profile using it is saved or started, when
 /// someone asks (Update Now), and again once it is a day old. A rule-set
@@ -43,10 +45,14 @@ public actor RuleListStore {
 
     struct Meta: Codable, Equatable {
         enum Names: String, Codable { case none, whole, part }
+        /// `file`: in `.addrs`; `tied`: some only sing-box can match.
+        enum Addresses: String, Codable { case none, file, tied }
         var url: String
         /// Nil: written by a helper before names were kept apart (see
         /// `upgrade`).
         var names: Names?
+        /// Nil: written before addresses were kept apart.
+        var addresses: Addresses?
     }
 
     // MARK: Reading
@@ -64,18 +70,36 @@ public actor RuleListStore {
             case .part?: isFile(namesFile(url)) ? namesFile(url).path : nil
             case .none?, nil: nil
             }
-            out[url] = .init(path: srs(url).path, namesPath: names)
+            out[url] = .init(path: srs(url).path, namesPath: names, addresses: addresses(url, m))
         }
         return out
+    }
+
+    private func addresses(_ url: String, _ m: Meta) -> [IPNetwork]? {
+        switch m.addresses {
+        case .none?: return []
+        case .file?:
+            // Read back through the parser: what reaches pf and the routes
+            // is a network, whatever the file holds.
+            guard isFile(addrsFile(url)), let text = try? String(contentsOf: addrsFile(url), encoding: .utf8) else { return nil }
+            var out: [IPNetwork] = []
+            for line in text.split(separator: "\n") {
+                guard let n = IPNetwork(String(line)) else { return nil }
+                out.append(n)
+            }
+            return out
+        case .tied?, nil: return nil
+        }
     }
 
     public func info(_ urls: [String]) -> [RuleListInfo] {
         urls.filter(RuleLists.isValidURL).map { url in
             var st = stat()
             let on = lstat(srs(url).path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
+            let kind = on ? meta(url)?.addresses : nil
             return RuleListInfo(url: url, bytes: on ? Int(st.st_size) : nil,
                                 updated: on ? Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec)) : nil,
-                                error: errors[url])
+                                error: errors[url], hasAddresses: kind.flatMap { $0 == .tied ? nil : $0 == .file })
         }
     }
 
@@ -101,7 +125,7 @@ public actor RuleListStore {
     /// missing first.)
     public func refresh(inUse: Set<String>) async {
         for m in allMeta() where !inUse.contains(m.url) && inflight[m.url] == nil {
-            for file in [srs(m.url), namesFile(m.url), metaFile(m.url)] { unlink(file.path) }
+            for file in [srs(m.url), namesFile(m.url), addrsFile(m.url), metaFile(m.url)] { unlink(file.path) }
             errors[m.url] = nil
         }
         await update(Array(inUse), olderThan: Self.maxAge)
@@ -124,17 +148,21 @@ public actor RuleListStore {
         guard fd >= 0 else { return }
         defer { close(fd) }
         for n in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        where n.range(of: #"^[0-9a-f]{24}\.(srs|json|names\.srs)$"#, options: .regularExpression) == nil && !n.hasPrefix(".") {
+        where n.range(of: #"^[0-9a-f]{24}\.(srs|json|names\.srs|addrs)$"#, options: .regularExpression) == nil && !n.hasPrefix(".") {
             SafeRemove.tree(in: fd, n)
         }
     }
 
-    /// Lists an earlier helper kept, without their names apart: given them
-    /// from the copy on disk (read back by sing-box), nothing downloaded.
+    /// Lists an earlier helper kept, without their names or addresses
+    /// apart: given them from the copy on disk (read back by sing-box),
+    /// nothing downloaded.
     public func upgrade() async {
-        for m in allMeta() where m.names == nil {
+        for m in allMeta() where m.names == nil || m.addresses == nil {
             let url = m.url
-            guard inflight[url] == nil, isFile(srs(url)) else { continue }
+            // Under way (a download, or another upgrade): waited for, so a
+            // start never reads a list half done.
+            if let running = inflight[url] { await running.value; continue }
+            guard isFile(srs(url)) else { continue }
             let t = Task { await self.upgradeOne(url) }
             inflight[url] = t
             await t.value
@@ -148,7 +176,7 @@ public actor RuleListStore {
         defer { unlink(source.path) }
         guard await tool(["decompile", srs(url).path, "-o", source.path]) == nil,
               let data = try? Data(contentsOf: source) else { return }
-        try? await keepNames(url, source: data, compiled: nil)
+        try? await keepParts(url, source: data, compiled: nil)
     }
 
     private func fetchOne(_ url: String) async {
@@ -203,21 +231,23 @@ public actor RuleListStore {
             }
         }
         guard let compiled = try? Data(contentsOf: tempSRS) else { throw Failure(reason: "sing-box wrote nothing") }
-        try await keepNames(url, source: source, compiled: (compiled, tempSRS))
+        try await keepParts(url, source: source, compiled: (compiled, tempSRS))
     }
 
-    /// Puts a list in place with its names apart (`RuleLists.names`): the
-    /// names file, the meta, then the list (`compiled`; nil: the one on disk
-    /// stays, and its date: the date says when it was last downloaded).
+    /// Puts a list in place with its names and addresses apart
+    /// (`RuleLists.names`, `RuleLists.addresses`): those files, the meta,
+    /// then the list (`compiled`; nil: the one on disk stays, and its date:
+    /// the date says when it was last downloaded).
     /// Each by a rename, so a running sing-box only ever reads a whole
     /// file. Unchanged, only the date changes, and sing-box has nothing to
     /// reload.
-    private func keepNames(_ url: String, source: Data, compiled: (data: Data, file: URL)?) async throws {
+    private func keepParts(_ url: String, source: Data, compiled: (data: Data, file: URL)?) async throws {
         let stamp = UUID().uuidString
         let tempJSON = dir.appendingPathComponent(".\(stamp).names.json")
         let tempNames = dir.appendingPathComponent(".\(stamp).names.srs")
         let tempMeta = dir.appendingPathComponent(".\(stamp).meta")
-        defer { unlink(tempJSON.path); unlink(tempNames.path); unlink(tempMeta.path) }
+        let tempAddrs = dir.appendingPathComponent(".\(stamp).addrs")
+        defer { unlink(tempJSON.path); unlink(tempNames.path); unlink(tempMeta.path); unlink(tempAddrs.path) }
 
         let kind: Meta.Names
         var names: Data?
@@ -233,10 +263,21 @@ public actor RuleListStore {
             names = try? Data(contentsOf: tempNames)
             guard names != nil else { throw Failure(reason: "sing-box wrote nothing") }
         }
-        let meta = Meta(url: url, names: kind)
+        let addressKind: Meta.Addresses
+        var addrs: Data?
+        switch RuleLists.addresses(source) {
+        case nil: addressKind = .tied
+        case let list? where list.isEmpty: addressKind = .none
+        case let list?:
+            addressKind = .file
+            addrs = Data(list.map(\.description).joined(separator: "\n").utf8)
+            try write(addrs!, to: tempAddrs)
+        }
+        let meta = Meta(url: url, names: kind, addresses: addressKind)
         let final = srs(url)
         if compiled.map({ (try? Data(contentsOf: final)) == $0.data }) ?? true, self.meta(url) == meta,
-           names.map({ (try? Data(contentsOf: namesFile(url))) == $0 }) ?? true {
+           names.map({ (try? Data(contentsOf: namesFile(url))) == $0 }) ?? true,
+           addrs.map({ (try? Data(contentsOf: addrsFile(url))) == $0 }) ?? true {
             if compiled != nil { utimes(final.path, nil) }
             return
         }
@@ -244,11 +285,15 @@ public actor RuleListStore {
         if names != nil, rename(tempNames.path, namesFile(url).path) != 0 {
             throw Failure(reason: "cannot replace the list: \(String(cString: strerror(errno)))")
         }
+        if addrs != nil, rename(tempAddrs.path, addrsFile(url).path) != 0 {
+            throw Failure(reason: "cannot replace the list: \(String(cString: strerror(errno)))")
+        }
         guard rename(tempMeta.path, metaFile(url).path) == 0,
               compiled.map({ rename($0.file.path, final.path) == 0 }) ?? true else {
             throw Failure(reason: "cannot replace the list: \(String(cString: strerror(errno)))")
         }
         if names == nil { unlink(namesFile(url).path) }
+        if addrs == nil { unlink(addrsFile(url).path) }
     }
 
     /// A new file, never through a link, readable by everyone (the lists
@@ -292,6 +337,7 @@ public actor RuleListStore {
     private func srs(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".srs") }
     private func metaFile(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".json") }
     private func namesFile(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".names.srs") }
+    private func addrsFile(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".addrs") }
 
     /// curl, run with sing-box's group (`exec-engine`): the kill switch
     /// lets it out, so a VPN coming back behind it (after an update, a

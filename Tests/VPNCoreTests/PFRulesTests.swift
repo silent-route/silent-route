@@ -91,10 +91,27 @@ import Testing
         #expect(out.contains("pass out quick on lo0 all no state"))
     }
 
+    /// The addresses macOS sends direct: out for every app while the tunnel
+    /// is up, but DNS there only from sing-box; without the tunnel (it is
+    /// coming back), blocked like everything else.
+    @Test func directAddresses() throws {
+        let direct = [IPNetwork("198.51.100.0/24")!, IPNetwork("192.0.2.7")!, IPNetwork("2001:db8:100::/48")!]
+        let up = try PFRules.generate(.init(tunInterface: "utun7", singBoxGroup: 4242, lan: .block, direct: direct))
+        #expect(up.contains("table <silentroute-direct> const { \\\n  198.51.100.0/24, \\\n  192.0.2.7/32, \\\n  2001:db8:100::/48 }\n"))
+        let lines = up.split(separator: "\n").map(String.init)
+        let group = try #require(lines.firstIndex { $0.contains("group 4242") })
+        let dns = try #require(lines.firstIndex(of: "block drop out quick proto { tcp udp } to <silentroute-direct> port { 53, 853 }"))
+        let pass = try #require(lines.firstIndex(of: "pass out quick to <silentroute-direct> flags any keep state"))
+        #expect(group < dns && dns < pass && lines.last == "block drop out quick all")
+        let down = try PFRules.generate(.init(tunInterface: nil, singBoxGroup: 4242, lan: .block, direct: direct))
+        #expect(!down.contains("silentroute-direct") && !down.contains("198.51.100"))
+        if let out = try pfctlParse(up) { #expect(out.contains("<silentroute-direct>")) }
+    }
+
     /// `pfctl -nv`: parses without loading and prints the rules as pf
     /// expands them. nil when /dev/pf is not readable.
     func pfctlParse(_ rules: String) throws -> String? {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("sb-pf-\(getpid()).conf")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("sb-pf-\(UUID().uuidString).conf")
         try rules.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         let p = Process()

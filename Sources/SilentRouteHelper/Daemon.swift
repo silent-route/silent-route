@@ -58,7 +58,9 @@ enum Daemon {
                                   tool: { await engine.ruleSet($0) })
         var options = Controller.Options(singBoxGroup: group, configEnvironment: env)
         options.localPorts = { LocalPorts.free($0) }
-        options.ruleLists = .init(local: { await lists.local($0) },
+        // A list an earlier helper kept is upgraded before a start reads it
+        // (a VPN resumed right after an update included).
+        options.ruleLists = .init(local: { await lists.upgrade(); return await lists.local($0) },
                                   fetchMissing: { p in await lists.update(RuleLists.urls(p), olderThan: .infinity) })
         let controller = Controller(
             profile: Profile(), options: options,

@@ -23,6 +23,9 @@ actor World {
     var dieRightAfterLaunch = false
     var tunAppears = true
     var healthy = true
+    /// sing-box answers its API only after this many asks (still setting
+    /// up its routes).
+    var readyAfterAsks = 0
     /// Outbound tags that do not answer even while `healthy`.
     var deadTags: Set<String> = []
     /// selector → member, as set through the clash API.
@@ -127,6 +130,13 @@ struct FakeEngine: Engine {
         for _ in 0..<20 { await Task.yield() }
     }
     func isRunning(pid: Int32) async -> Bool { await world.running.contains(pid) }
+    func isReady() async -> Bool {
+        await world.set2 { w in
+            guard !w.running.isEmpty else { return false }
+            guard w.readyAfterAsks == 0 else { w.readyAfterAsks -= 1; w.log.append("engine.notReady"); return false }
+            return true
+        }
+    }
     func select(_ selector: String, member: String) async throws {
         await world.set { $0.selections[selector] = member; $0.log.append("engine.select") }
     }
@@ -142,6 +152,7 @@ struct FakeNetwork: NetworkInspector {
     func tunInterface() async -> String? { await world.tun }
     func foreignTunnel() async -> String? { await world.foreign }
     func restoreRouting() async { await world.set { $0.routingRestored += 1; $0.log.append("net.restore") } }
+    func removeStaleTunnelRoutes() async { await world.set { $0.log.append("net.staleRoutes") } }
     func overrideDNS(server: String, local: Bool) async {
         await world.set { $0.dnsOverridden = true; $0.dnsLocal = local; $0.log.append(local ? "dns.override(local)" : "dns.override") }
     }

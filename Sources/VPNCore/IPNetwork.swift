@@ -42,6 +42,31 @@ public struct IPNetwork: Hashable, Sendable, Codable, CustomStringConvertible {
         return IPNetwork.mask(address.bytes, prefix: prefix) == bytes
     }
 
+    /// The part of this network outside `other`: itself when they do not
+    /// overlap, nothing when `other` covers it, else the halves around
+    /// `other`, one per bit between the two prefixes.
+    public func subtracting(_ other: IPNetwork) -> [IPNetwork] {
+        guard other.bytes.count == bytes.count else { return [self] }
+        if other.prefix <= prefix, IPNetwork.mask(bytes, prefix: other.prefix) == other.bytes { return [] }
+        guard prefix < other.prefix, IPNetwork.mask(other.bytes, prefix: prefix) == bytes else { return [self] }
+        var out: [IPNetwork] = []
+        var rest = self
+        while rest.prefix < other.prefix {
+            // Split in two: the half holding `other` goes on, the other stays.
+            let bit = rest.prefix
+            var flipped = IPNetwork.mask(other.bytes, prefix: bit + 1)
+            flipped[bit / 8] ^= 0x80 >> UInt8(bit % 8)
+            out.append(IPNetwork(bytes: flipped, prefix: bit + 1))
+            rest = IPNetwork(bytes: IPNetwork.mask(other.bytes, prefix: bit + 1), prefix: bit + 1)
+        }
+        return out
+    }
+
+    init(bytes: [UInt8], prefix: Int) {
+        self.bytes = IPNetwork.mask(bytes, prefix: prefix)
+        self.prefix = prefix
+    }
+
     // MARK: Codable as a plain string
 
     public init(from decoder: Decoder) throws {
