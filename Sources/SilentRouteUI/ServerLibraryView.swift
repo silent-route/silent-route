@@ -11,7 +11,7 @@ struct ServerLibraryView: View {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Server Library").font(.largeTitle.weight(.bold))
-                    Text("Servers and proxies to add to any profile (Servers › Add Server › From Library). A profile takes a copy: changing one here leaves the profiles as they are.")
+                    Text("Servers and proxies to add to any profile (Servers › Add Server › From Library). Add them here by hand or from a profile. A profile takes a copy: changing one here leaves the profiles as they are.")
                         .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -19,10 +19,28 @@ struct ServerLibraryView: View {
                            servers: Binding(get: { model.library.servers }, set: { model.setServers($0) }),
                            check: model.helper == .ready ? { [model] t in try await model.probe(t) } : nil,
                            issues: { t in Validation.check(Profile(name: "Library", tunnels: model.library.servers)).filter { $0.tunnel == t.id } },
-                           addItems: { EmptyView() }, rowItems: { _ in EmptyView() })
+                           addItems: { fromProfile }, rowItems: { _ in EmptyView() })
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Add Server › From Profile › a profile › its server: a copy here, as
+    /// a profile's server menu does with Add to Library.
+    @ViewBuilder
+    private var fromProfile: some View {
+        let profiles = model.library.profiles.filter { !$0.tunnels.isEmpty }
+        Divider()
+        Menu("From Profile") {
+            ForEach(profiles) { p in
+                Menu(p.name) {
+                    ForEach(p.tunnels) { t in
+                        Button("\(t.name) — \(t.proto.displayName)") { model.addToLibrary(t) }
+                    }
+                }
+            }
+        }
+        .disabled(profiles.isEmpty)
     }
 }

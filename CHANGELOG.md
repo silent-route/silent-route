@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.9-beta
+
+- **Server Library: add a server from a profile.** Add Server › From Profile lists the profiles and their servers; the one you pick is copied into the library. Before, a server could only be typed in from scratch there, or sent from a profile one at a time through its menu.
+- **A tidier disk image.** The window opens at the size of its contents: the app on the left, Applications on the right, an arrow between them, with no scrolling (also when Finder shows its tab bar or path bar). The disk shows the app's icon.
+- **A lighter shadow under the app icon.**
+
 ## 1.6.8-beta
 
 Replaces 1.7.0-beta, which was withdrawn. It moved to sing-box 1.14.3, and on some networks Hysteria2 kept dropping on macOS: the new QUIC code sends larger packets to probe the path, and when a router answers that a packet is too large, macOS reports it in a way that sing-box 1.14 treats as fatal for the whole connection. Every site and app going through that server then reconnected, over and over. This release stays on sing-box 1.13.16, as 1.6.7 did, and keeps the other fixes of 1.7.0. If you installed 1.7.0-beta, install this one by hand: the app does not offer a lower version as an update.

@@ -31,7 +31,10 @@ jobs:
           SR_UPDATE_REPOSITORY: ${{ github.repository }}
         run: SR_VERSION="${GITHUB_REF_NAME#v}" scripts/build-app.sh
       - name: Disk image
-        run: scripts/package-release.sh
+        run: |
+          python3 -m venv build/dmgbuild
+          build/dmgbuild/bin/pip install --quiet --require-hashes -r scripts/dmgbuild-requirements.txt
+          DMGBUILD=build/dmgbuild/bin/dmgbuild scripts/package-release.sh
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

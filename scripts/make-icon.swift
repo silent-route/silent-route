@@ -14,10 +14,10 @@ func draw(in ctx: CGContext) {
     let tile = CGRect(x: 100, y: 100, width: 824, height: 824)
     let tilePath = CGPath(roundedRect: tile, cornerWidth: 186, cornerHeight: 186, transform: nil)
 
-    // Drop shadow under the tile.
+    // A light drop shadow under the tile, close to it, as on Apple's icons.
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 28,
-                  color: CGColor(gray: 0, alpha: 0.35))
+    ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 12,
+                  color: CGColor(gray: 0, alpha: 0.22))
     ctx.addPath(tilePath)
     ctx.setFillColor(CGColor(red: 0.10, green: 0.16, blue: 0.42, alpha: 1))
     ctx.fillPath()
