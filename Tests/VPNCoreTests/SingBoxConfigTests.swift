@@ -176,39 +176,50 @@ enum Fixtures {
     @Test func ruleOrderAndSemantics() throws {
         let cfg = try SingBoxConfig.generate(Fixtures.profile, env: Fixtures.env)
         guard case .array(let rules)? = cfg["route"]?["rules"] else { Issue.record("no rules"); return }
-        // sniff, hijack-dns, LAN, then user rules in order (a route through
-        // servers preceded by its ping refusal); disabled rule absent; the
-        // default route's ping refusal last.
-        #expect(rules.count == 3 + 5 + 2)
-        #expect(rules[2]["ip_is_private"] == true)
+        // sniff, hijack-dns, the TUN's own networks refused, LAN, then user
+        // rules in order (a route through servers preceded by its ping
+        // refusal); disabled rule absent; the default route's ping refusal last.
+        #expect(rules.count == 4 + 5 + 2)
+        #expect(rules[2]["ip_cidr"] == ["172.19.0.4/30", "fdfe:dcba:9876::4/126"])
+        #expect(rules[2]["action"] == "reject")
+        #expect(rules[3]["ip_is_private"] == true)
         // Domestic: lists (geoip + geosite) OR the domain zones.
-        #expect(rules[3]["mode"] == "or")
-        guard case .array(let dom)? = rules[3]["rules"] else { Issue.record("Domestic is not logical"); return }
+        #expect(rules[4]["mode"] == "or")
+        guard case .array(let dom)? = rules[4]["rules"] else { Issue.record("Domestic is not logical"); return }
         #expect(dom.contains { $0["rule_set"] == ["list-geoip-cn", "list-geosite-cn", "list-geosite-geolocation-cn"] })
         #expect(dom.contains { $0["domain_suffix"] == ["cn", "xn--fiqs8s"] })
-        #expect(rules[3]["outbound"] == "direct")
+        #expect(rules[4]["outbound"] == "direct")
         // Telegram goes through servers: its pings are refused first — the
         // same match AND icmp — never sent direct.
-        #expect(rules[4]["mode"] == "and")
-        #expect(rules[4]["action"] == "reject")
-        guard case .array(let ping)? = rules[4]["rules"] else { Issue.record("ping refusal is not logical"); return }
+        #expect(rules[5]["mode"] == "and")
+        #expect(rules[5]["action"] == "reject")
+        guard case .array(let ping)? = rules[5]["rules"] else { Issue.record("ping refusal is not logical"); return }
         #expect(ping.contains { $0["process_path_regex"] == [#"^/Applications/Telegram\.app/"#] })
         #expect(ping.contains { $0["network"] == ["icmp"] })
         // Single condition group → plain rule.
-        #expect(rules[5]["process_path_regex"] == [#"^/Applications/Telegram\.app/"#])
-        #expect(rules[5]["outbound"] == .string(SingBoxConfig.routeTag(Fixtures.telegramID)))
+        #expect(rules[6]["process_path_regex"] == [#"^/Applications/Telegram\.app/"#])
+        #expect(rules[6]["outbound"] == .string(SingBoxConfig.routeTag(Fixtures.telegramID)))
         // Two destination kinds → OR inside, no AND wrapper needed.
-        #expect(rules[6]["type"] == "logical")
-        #expect(rules[6]["mode"] == "or")
+        #expect(rules[7]["type"] == "logical")
+        #expect(rules[7]["mode"] == "or")
         // Apps + ports + network → AND of three groups; limited to a
         // network, it never sees a ping, so no refusal before it.
-        #expect(rules[7]["mode"] == "and")
-        #expect(rules[7]["outbound"] == .string(SingBoxConfig.routeTag(UUID(uuidString: "00000000-0000-0000-0000-0000000000c3")!)))
-        #expect(rules[8]["action"] == "reject")
-        // Everything else goes through servers: pings left over are refused.
-        #expect(rules[9]["network"] == ["icmp"])
+        #expect(rules[8]["mode"] == "and")
+        #expect(rules[8]["outbound"] == .string(SingBoxConfig.routeTag(UUID(uuidString: "00000000-0000-0000-0000-0000000000c3")!)))
         #expect(rules[9]["action"] == "reject")
+        // Everything else goes through servers: pings left over are refused.
+        #expect(rules[10]["network"] == ["icmp"])
+        #expect(rules[10]["action"] == "reject")
         #expect(cfg["route"]?["final"] == .string(SingBoxConfig.routeTag(Fixtures.defaultRouteID)))
+    }
+
+    /// A connection to the TUN's own address must never be routed: out it
+    /// would come straight back in, for ever.
+    @Test func theTunnelsOwnAddressesAreRefused() throws {
+        for a in [SingBoxConfig.tunAddress4, SingBoxConfig.tunAddress6, SingBoxConfig.tunDNS] {
+            let host = try #require(IPNetwork(String(a.split(separator: "/")[0])))
+            #expect(SingBoxConfig.tunNetworks.contains { IPNetwork($0)!.contains(host) }, "\(a)")
+        }
     }
 
     @Test func dnsFollowsTheRules() throws {

@@ -203,6 +203,13 @@
         "protocol" : "dns"
       },
       {
+        "action" : "reject",
+        "ip_cidr" : [
+          "172.19.0.4/30",
+          "fdfe:dcba:9876::4/126"
+        ]
+      },
+      {
         "action" : "route",
         "ip_is_private" : true,
         "outbound" : "direct"

@@ -1,20 +1,23 @@
 # Changelog
 
+## 1.7.2-beta
+
+- **Torrent clients no longer freeze the app.** A program connecting to the tunnel's own address sent the connection round in a loop, thousands of times a second; such connections are now refused.
+- **The Monitor stays responsive** with thousands of connections open.
+
 ## 1.7.1-beta
 
-Replaces 1.7.0-beta, which was withdrawn, and the short-lived 1.6.8-beta and 1.6.9-beta, whose changes are all here. 1.7.0 moved to sing-box 1.14.3, and on some networks Hysteria2 kept dropping on macOS: the new QUIC code sends larger packets to probe the path, and when a router answers that a packet is too large, macOS reports it in a way that sing-box 1.14 treats as fatal for the whole connection. Every site and app going through that server then reconnected, over and over. 1.7.1 stays on sing-box 1.13.16, as 1.6.7 did, and keeps the other fixes of 1.7.0. From 1.7.0, 1.6.9 or 1.6.8 the app updates to it by itself.
+Replaces 1.7.0-beta and the short-lived 1.6.8 and 1.6.9. 1.7.0 moved to sing-box 1.14, which on some networks kept dropping Hysteria2 connections on macOS; 1.7.1 is back on sing-box 1.13.16 and keeps everything else. Earlier versions update to it by themselves.
 
-- **Session logs: choose how many to keep, and a cleaning app can no longer spoil them.** Settings › Advanced › Sessions to keep: 30 by default, 0 to 1000 (0 turns session logs off); fewer than there are asks before deleting the rest. The running session's file is append-only while it is written (`uappnd`), so an app like CleanMyMac can no longer empty it mid-session; files such an app emptied are removed instead of piling up as blank entries. Only the session the helper says is running shows as running; one that ended without a word (the Mac lost power) says "cut short". Every log, the helper's own too, stays under 4 MB.
-- **A server check or a connection no longer depends on fixed local ports.** sing-box's control port and the Wi-Fi login proxy are chosen afresh at each start, and a server check picks a free port: a program holding one of them could stop the VPN from connecting until the helper restarted, or make a check report another proxy's address.
-- **Lists no profile uses any more are removed** instead of being downloaded again every day.
-- **Emergency Restore finds the router of any connection** (an adapter, a phone), not only of the first few network ports.
-- **Smaller fixes.** A change that could not be saved because another one got there first now says so; a stuck system tool is ended after its timeout; menu commands for a window not open yet run once it appears.
-- **Server Library: add a server from a profile.** Add Server › From Profile lists the profiles and their servers; the one you pick is copied into the library. Before, a server could only be typed in from scratch there, or sent from a profile one at a time through its menu.
-- **A tidier disk image.** The window opens at the size of its contents: the app on the left, Applications on the right, an arrow between them, with no scrolling (also when Finder shows its tab bar or path bar). The disk shows the app's icon.
-- **A lighter shadow under the app icon.**
-- **A list of sites and addresses no longer sends other names past the tunnel.** A list used in a route also decides where the names in it are looked up. When a list held addresses as well (`IP-CIDR` lines, a country's networks next to its sites), sing-box asked that route's resolver about every name, in the list or not, to compare the answer with those addresses; for a direct route that was past the tunnel. Now only a list's sites take part in DNS; traffic is still matched against the whole list. Lists already downloaded are converted when the helper starts, without downloading them again.
-- **Save… and Export… in the log window write the whole log.** For a large session they wrote what the window shows: its beginning and its end, with the middle left out.
-- **The log shows harmless connection closes in grey, not red.** sing-box calls them errors: the server closing an idle connection with code 0 ("no error"), or an app having already dropped its side ("endpoint not connected"). Nothing went wrong in either.
+- **Fewer DNS leaks.** A list with both sites and addresses no longer sends other names past the tunnel.
+- **Session logs.** Choose how many to keep (Settings › Advanced, 0–1000, 30 by default). A cleaning app such as CleanMyMac can no longer empty the running log, and files it emptied are removed. Each log stays under 4 MB.
+- **The log window.** Save… writes the whole log; harmless connection closes are grey, not red; only the running session is marked as running.
+- **Server Library.** Add Server › From Profile copies a server from any profile.
+- **More reliable connections.** sing-box's local ports are picked anew at each start, so a program holding one can no longer stop the VPN; server checks pick a free port too.
+- **Lists no profile uses any more** are removed instead of being downloaded every day.
+- **Emergency Restore** finds the router on any connection, adapters and phones included.
+- **A tidier disk image** with an arrow to Applications, and a lighter icon shadow.
+- Smaller fixes.
 
 ## 1.6.7-beta
 

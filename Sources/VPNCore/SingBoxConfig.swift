@@ -107,6 +107,12 @@ public enum SingBoxConfig {
     /// another sing-box-based VPN is never mistaken for ours.
     public static let tunAddress4 = "172.19.0.5/30"
     public static let tunAddress6 = "fdfe:dcba:9876::5/126"
+    /// The networks of those addresses. Nothing is ever sent there: a
+    /// connection to the TUN's own address would be routed out (it is a
+    /// private address), come back in through the TUN and go out again, for
+    /// ever — a program connecting to itself on that address (a torrent
+    /// client does) once made thousands of connections a second.
+    static let tunNetworks = ["172.19.0.4/30", "fdfe:dcba:9876::4/126"]
 
     // MARK: - Full config
 
@@ -142,6 +148,7 @@ public enum SingBoxConfig {
         var routeRules: [JSON] = [
             ["action": "sniff"],
             ["protocol": "dns", "action": "hijack-dns"],
+            ["ip_cidr": .strings(tunNetworks), "action": "reject"],
         ]
         if env.localDNS {
             // Whatever arrives there is a query for sing-box's DNS, never
