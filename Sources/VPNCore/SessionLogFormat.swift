@@ -14,6 +14,10 @@ public enum SessionLogFormat {
     public static let indexed = "Sessions"
     /// Written last in a file when its session ends.
     public static let endMarker = "session ended:"
+    /// How many sessions a user may keep, the running one included: none
+    /// (no logs) to a thousand, each at most 4 MB.
+    public static let keptRange = 0...1000
+    public static let defaultKept = 30
 
     /// `2026-10-14_12-03-09.log`, or `…_2.log` for a second one that second.
     public static func fileName(for date: Date, suffix: Int? = nil) -> String {

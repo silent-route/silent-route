@@ -263,6 +263,8 @@ remove_user_logs() {
     [ "$uid" = 0 ] || [ "$uid" -ge 500 ] || continue
     home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk 'NR==1 {print $2}') || continue
     [ -n "$home" ] && [ -d "$home/Library/Logs/Silent Route" ] || continue
+    # A running session's file is append-only (uappnd); its owner may lift that.
+    sudo -u "#$uid" /usr/bin/chflags -R nouappnd -- "$home/Library/Logs/Silent Route" 2>/dev/null || true
     sudo -u "#$uid" /bin/rm -rf -- "$home/Library/Logs/Silent Route" 2>/dev/null \
       && note "session logs of $user removed"
   done || true

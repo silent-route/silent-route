@@ -22,7 +22,19 @@ import Testing
             ((try? FileManager.default.contentsOfDirectory(atPath: sessions.path)) ?? []).sorted()
         }
         func text(_ name: String) -> String { (try? String(contentsOf: sessions.appendingPathComponent(name), encoding: .utf8)) ?? "" }
-        func cleanup() { try? FileManager.default.removeItem(at: root) }
+        func cleanup() {
+            // A failed test may leave a file append-only.
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/chflags")
+            p.arguments = ["-R", "nouappnd", root.path]
+            try? p.run()
+            p.waitUntilExit()
+            try? FileManager.default.removeItem(at: root)
+        }
+        func flags(_ name: String) -> UInt32 {
+            var st = stat()
+            return lstat(sessions.appendingPathComponent(name).path, &st) == 0 ? st.st_flags : 0
+        }
     }
 
     final class Asked: @unchecked Sendable {
@@ -79,6 +91,85 @@ import Testing
         }
         #expect(env.files().count == 3)
         #expect(env.files().map(env.text).allSatisfy { !$0.contains("P0") && !$0.contains("P1") })
+    }
+
+    @Test func theRunningFileIsAppendOnlyUntilItsSessionEnds() throws {
+        let env = Env()
+        defer { env.cleanup() }
+        let log = env.log()
+        log.setOwner(env.me)
+        log.handle(.began(profile: "Home", resumed: false))
+        let name = try #require(env.files().first)
+        #expect(log.currentFile(of: env.me) == name)
+        #expect(log.currentFile(of: env.me + 1) == nil, "only its owner is told")
+        #expect(env.flags(name) & UInt32(UF_APPEND) != 0)
+        let path = env.sessions.appendingPathComponent(name).path
+        // What a cleaning app does: cut it, or delete it.
+        #expect(truncate(path, 0) != 0 && errno == EPERM)
+        #expect(unlink(path) != 0 && errno == EPERM)
+        log.write("still written")
+        log.handle(.ended(reason: "turned off"))
+        #expect(env.flags(name) & UInt32(UF_APPEND) == 0)
+        #expect(log.currentFile(of: env.me) == nil)
+        #expect(env.text(name).hasPrefix("# Silent Route session") && env.text(name).contains("still written"))
+    }
+
+    @Test func emptiedFilesGoAndLeftoverFlagsAreLifted() throws {
+        let env = Env()
+        defer { env.cleanup() }
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = env.log()
+        first.setOwner(env.me)
+        first.handle(.began(profile: "A", resumed: false), at: t0)
+        first.handle(.ended(reason: "turned off"), at: t0.addingTimeInterval(10))
+        // A helper that stopped mid-session: its file stays append-only.
+        let crashed = env.log()
+        crashed.setOwner(env.me)
+        crashed.handle(.began(profile: "B", resumed: false), at: t0.addingTimeInterval(100))
+        let left = SessionLogFormat.fileName(for: t0.addingTimeInterval(100))
+        // A cleaning app emptied an old one.
+        let emptied = SessionLogFormat.fileName(for: t0.addingTimeInterval(-100))
+        try Data().write(to: env.sessions.appendingPathComponent(emptied))
+
+        let next = env.log()
+        next.setOwner(env.me)
+        next.handle(.began(profile: "C", resumed: true), at: t0.addingTimeInterval(200))
+        #expect(!env.files().contains(emptied))
+        #expect(env.files().count == 3)
+        #expect(env.flags(left) & UInt32(UF_APPEND) == 0, "lifted, so the user can delete it")
+        next.handle(.ended(reason: "turned off"))
+        _ = crashed
+    }
+
+    @Test func theUsersNumberIsKeptAndZeroWritesNothing() throws {
+        let env = Env()
+        defer { env.cleanup() }
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let log = env.log()
+        for i in 0..<5 {
+            log.setOwner(env.me, keep: 10)
+            log.handle(.began(profile: "P\(i)", resumed: false), at: t0.addingTimeInterval(Double(i) * 100))
+            log.handle(.ended(reason: "turned off"), at: t0.addingTimeInterval(Double(i) * 100 + 10))
+        }
+        #expect(env.files().count == 5)
+        // Fewer chosen with the VPN off: older ones go at once.
+        log.setKeep(2, for: env.me)
+        #expect(env.files().count == 2)
+        // While a session runs it counts, and stays.
+        log.setOwner(env.me, keep: 2)
+        log.handle(.began(profile: "Now", resumed: false), at: t0.addingTimeInterval(1000))
+        log.setKeep(1, for: env.me)
+        #expect(env.files() == [SessionLogFormat.fileName(for: t0.addingTimeInterval(1000))])
+        log.handle(.ended(reason: "turned off"))
+        // None: nothing written, sing-box's output discarded, the rest gone.
+        log.setOwner(env.me, keep: 0)
+        log.handle(.began(profile: "Off", resumed: false), at: t0.addingTimeInterval(2000))
+        let out = try #require(log.engineOutput())
+        out.write(Data("discarded\n".utf8))
+        #expect(env.files().isEmpty)
+        #expect(log.currentFile(of: env.me) == nil)
+        log.handle(.ended(reason: "turned off"))
+        #expect(log.engineOutput() == nil)
     }
 
     @Test func aGrowingFileKeepsItsStartAndItsLatestLines() throws {

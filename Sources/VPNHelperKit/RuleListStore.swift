@@ -95,9 +95,16 @@ public actor RuleListStore {
         for t in tasks { await t.value }
     }
 
-    /// Every list on disk that is a day old.
-    public func refreshStale() async {
-        await update(allMeta().map(\.url), olderThan: Self.maxAge)
+    /// Lists no profile uses any more go; those in use are fetched again
+    /// once a day old. (A list removed here while a profile is being saved
+    /// with it is fetched again: every start and switch fetches what is
+    /// missing first.)
+    public func refresh(inUse: Set<String>) async {
+        for m in allMeta() where !inUse.contains(m.url) && inflight[m.url] == nil {
+            for file in [srs(m.url), namesFile(m.url), metaFile(m.url)] { unlink(file.path) }
+            errors[m.url] = nil
+        }
+        await update(Array(inUse), olderThan: Self.maxAge)
     }
 
     private func allMeta() -> [Meta] {

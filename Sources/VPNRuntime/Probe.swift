@@ -34,8 +34,12 @@ public enum Probe {
     ///     trampoline, which gives it the kill switch's group); empty: run it
     ///     directly.
     ///   - direct: bind to the physical interface, past the VPN's tunnel.
-    public static func run(_ tunnel: Tunnel, singBox: String, socksPort: UInt16 = 11099,
+    ///   - socksPort: nil: a free one.
+    public static func run(_ tunnel: Tunnel, singBox: String, socksPort: UInt16? = nil,
                            timeout: TimeInterval = 20, launcher: [String] = [], direct: Bool = false) async throws -> Report {
+        guard let socksPort = socksPort ?? LocalPorts.free(1)?.first else {
+            throw Failure.singBoxDidNotStart("no free local port for the check")
+        }
         // The port is open on localhost while the check runs: a fresh
         // password keeps everything else on the Mac off it.
         let user = "probe"

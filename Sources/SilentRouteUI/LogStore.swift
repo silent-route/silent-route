@@ -25,20 +25,25 @@ public struct LogStore: Sendable {
         return nil
     }
 
-    /// Newest first.
-    public func sessions() -> [LogSession] {
+    /// Newest first. `current` is the running session's file, as the helper
+    /// says: only that one is still going. A file left empty from outside
+    /// (a cleaning app) is not listed; the helper removes it.
+    public func sessions(current: String? = nil) -> [LogSession] {
         guard let folder else { return [] }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         return names.compactMap { name -> LogSession? in
             guard SessionLogFormat.isSessionFile(name), let started = SessionLogFormat.date(fromFileName: name) else { return nil }
             let url = folder.appendingPathComponent(name)
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let bytes = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+            guard bytes > 0 || name == current else { return nil }
             let (first, last) = Self.ends(of: url)
-            let ended = last.contains(SessionLogFormat.endMarker)
+            let running = name == current
             return LogSession(id: name, started: started,
-                              ended: ended ? attrs?[.modificationDate] as? Date : nil,
+                              ended: running ? nil : attrs?[.modificationDate] as? Date,
+                              interrupted: !running && !last.contains(SessionLogFormat.endMarker),
                               profile: first.flatMap(SessionLogFormat.profile(fromHeader:)) ?? "",
-                              bytes: (attrs?[.size] as? NSNumber)?.intValue ?? 0)
+                              bytes: bytes)
         }
         .sorted { $0.started > $1.started }
     }
@@ -49,9 +54,17 @@ public struct LogStore: Sendable {
     }
 
     /// Moves a session's file to the Trash (it can be put back from there).
+    /// Not the running one: it is append-only while written, and a file a
+    /// stopped helper left so is released first.
     @discardableResult
     public func moveToTrash(_ id: String) -> Bool {
         guard let url = url(of: id) else { return false }
+        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        if fd >= 0 {
+            var st = stat()
+            if fstat(fd, &st) == 0, st.st_flags & UInt32(UF_APPEND) != 0 { _ = fchflags(fd, st.st_flags & ~UInt32(UF_APPEND)) }
+            close(fd)
+        }
         return (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil
     }
 

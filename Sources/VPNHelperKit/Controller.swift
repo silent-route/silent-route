@@ -41,8 +41,10 @@ public actor Controller {
         /// as down: one lost check (a dropped packet, a busy moment) does
         /// not move or block its routes.
         public var failAfterChecks = 2
-        /// Localhost port for the Wi-Fi login-page proxy; nil: none.
-        public var captivePort: UInt16?
+        /// Free localhost ports, asked for at each sing-box start: the Wi-Fi
+        /// login-page proxy and its clash API. Nil: the environment's API
+        /// port and no login proxy (tests).
+        public var localPorts: (@Sendable (Int) -> [UInt16]?)?
         /// While a network wants a login: how often to look whether the
         /// servers answer yet.
         public var captiveCheckSeconds: Double = 3
@@ -108,7 +110,7 @@ public actor Controller {
     private var wantConnected = false
     private var recovery: Task<Void, Never>?
     private var watchers: [UUID: AsyncStream<Status>.Continuation] = [:]
-    private var apiSecret: String?
+    private var api: (port: UInt16, secret: String)?
     /// Last measured round trip per server (nil inside: not answering).
     private var latency: [UUID: Int?] = [:]
     /// Where each route's selector points now.
@@ -292,7 +294,7 @@ public actor Controller {
         latency = [:]
         alive = []
         strikes = [:]
-        apiSecret = nil
+        api = nil
         connectedSince = nil
         sessionSince = nil
         set(.off)
@@ -547,12 +549,16 @@ public actor Controller {
         env.clashAPISecret = Secret.random()
         env.localDNS = localDNS
         if let logLevel { env.logLevel = logLevel }
-        env.captive = options.captivePort.map {
-            .init(port: $0, username: "silentroute",
-                  password: Secret.random())
+        env.captive = nil
+        if let localPorts = options.localPorts {
+            guard let ports = localPorts(2), ports.count == 2 else {
+                throw CommandError.failed("No free local port for sing-box")
+            }
+            env.captive = .init(port: ports[0], username: "silentroute", password: Secret.random())
+            env.clashAPIPort = ports[1]
         }
         let data = try SingBoxConfig.generate(profile, env: env).encoded()
-        apiSecret = env.clashAPISecret
+        api = (env.clashAPIPort, env.clashAPISecret)
         captiveProxy = env.captive
         return data
     }
@@ -561,8 +567,8 @@ public actor Controller {
     /// owner's app, which opens the login page through it.
     public var currentCaptiveProxy: SingBoxConfig.LocalProxy? { captive ? captiveProxy : nil }
 
-    /// The clash API secret of the running sing-box, for the app's live stats.
-    public var currentAPISecret: String? { phase == .connected ? apiSecret : nil }
+    /// The running sing-box's clash API, for the app's live stats.
+    public var currentAPI: (port: UInt16, secret: String)? { phase == .connected ? api : nil }
 
     /// launchd is stopping the helper: an update, a shutdown or a restart.
     ///
@@ -597,7 +603,7 @@ public actor Controller {
                 await network.releaseLocalDNS()
                 localDNS = false
                 connectedSince = nil
-                apiSecret = nil
+                api = nil
                 session(.ended(reason: "the helper stopped (an update or a shutdown); the network stays blocked until the VPN is back"))
                 phase = .off
                 publish()
@@ -927,7 +933,7 @@ public actor Controller {
         }
         connectedSince = nil
         sessionSince = nil
-        apiSecret = nil
+        api = nil
         if profile.protectionMode == .always, let r = try? rules(tun: nil) {
             // "Always" means blocked whenever not connected.
             do {

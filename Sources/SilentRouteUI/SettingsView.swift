@@ -1,5 +1,6 @@
 import ServiceManagement
 import SwiftUI
+import VPNCore
 
 /// App settings (⌘,). Profiles hold everything about the network; this is
 /// only about the app itself.
@@ -18,6 +19,10 @@ public struct SettingsView: View {
     @AppStorage(Preferences.transparencyKey) private var transparency = Preferences.Transparency.standard
     @AppStorage(Preferences.logsIndexedKey) private var logsIndexed = false
     @State private var deleteLogs = true
+    /// The number being typed; sent once it settles.
+    @State private var keptDraft = SessionLogFormat.defaultKept
+    /// A smaller number that would delete logs, waiting for a yes.
+    @State private var keptConfirm: (kept: Int, deleted: Int)?
     private let updater = Updater.shared
 
     public init(model: AppModel) { self.model = model }
@@ -160,6 +165,59 @@ public struct SettingsView: View {
         page { updatesSection }
     }
 
+    /// How many sessions are kept: typed or stepped, sent a moment after
+    /// the last change. Fewer than there are asks first: the rest are deleted.
+    @ViewBuilder
+    private var keptSessionsField: some View {
+        let range = SessionLogFormat.keptRange
+        LabeledContent("Sessions to keep") {
+            HStack(spacing: 4) {
+                TextField("Sessions to keep", value: $keptDraft, format: .number)
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 64)
+                Stepper("Sessions to keep", value: $keptDraft, in: range)
+                    .labelsHidden()
+            }
+        }
+        .disabled(model.helper != .ready)
+        .onAppear { keptDraft = model.keptSessions }
+        .onChange(of: model.keptSessions) { _, n in keptDraft = n }
+        .task(id: keptDraft) {
+            let n = min(max(keptDraft, range.lowerBound), range.upperBound)
+            guard n == keptDraft else { keptDraft = n; return }
+            guard n != model.keptSessions else { return }
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            let have = await Task.detached { LogStore.currentUser.sessions().count }.value
+            if have > n {
+                keptConfirm = (n, have - n)
+            } else {
+                await model.setKeptSessions(n)
+            }
+        }
+        .confirmationDialog(keptConfirm.map { $0.kept == 0 ? "Turn session logs off?" : "Keep only the last \($0.kept)?" } ?? "",
+                            isPresented: Binding(get: { keptConfirm != nil }, set: { if !$0 { keptConfirm = nil } })) {
+            if let c = keptConfirm {
+                Button(c.deleted == 1 ? "Delete 1 Log" : "Delete \(c.deleted) Logs", role: .destructive) {
+                    keptConfirm = nil
+                    Task { await model.setKeptSessions(c.kept) }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                keptConfirm = nil
+                keptDraft = model.keptSessions
+            }
+        } message: {
+            if let c = keptConfirm {
+                Text(c.deleted == 1 ? "1 older session log will be deleted." : "\(c.deleted) older session logs will be deleted.")
+            }
+        }
+        Text("The running session counts, and older ones are deleted. 0 turns session logs off. A log takes at most 4 MB.")
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var advanced: some View {
         page {
             Section("Helper") {
@@ -176,6 +234,7 @@ public struct SettingsView: View {
                 Text("Logs each connection — which app, which site, through which route and server — to track a problem down. Takes effect from the next session (the next time the VPN is turned on). Such logs grow faster and name every site you open; they stay readable only by you.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                keptSessionsField
                 Toggle("Include logs in Time Machine backups", isOn: $logsInBackups)
                     .onChange(of: logsInBackups) { _, _ in Preferences.applyLogFolderSettings() }
                 Toggle("Let Spotlight index logs", isOn: $logsIndexed)

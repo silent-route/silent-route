@@ -22,10 +22,16 @@ import Testing
         try "# Silent Route session · profile: Work\nx [helper] connected\n"
             .write(to: unindexed.appendingPathComponent(SessionLogFormat.fileName(for: t0.addingTimeInterval(60))), atomically: true, encoding: .utf8)
         try "not ours".write(to: unindexed.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
-        let sessions = store.sessions()
+        // Emptied by a cleaning app: not listed.
+        try Data().write(to: unindexed.appendingPathComponent(SessionLogFormat.fileName(for: t0.addingTimeInterval(-120))))
+        let running = SessionLogFormat.fileName(for: t0.addingTimeInterval(60))
+        let sessions = store.sessions(current: running)
         #expect(sessions.map(\.profile) == ["Work", "Home"])
-        #expect(sessions[0].ended == nil, "still going")
-        #expect(sessions[1].ended != nil)
+        #expect(sessions[0].ended == nil, "still going: the helper says so")
+        #expect(sessions[1].ended != nil && !sessions[1].interrupted)
+        // Without the helper's word nothing is going; one with no end line was cut short.
+        let unsure = store.sessions()
+        #expect(unsure[0].ended != nil && unsure[0].interrupted)
         #expect(store.text(of: sessions[1].id)?.contains("turned off") == true)
         #expect(store.text(of: "../notes.txt") == nil)
 

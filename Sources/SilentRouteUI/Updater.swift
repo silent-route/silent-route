@@ -110,7 +110,7 @@ public final class Updater {
 
     // MARK: Checking
 
-    /// Once a day while the setting is on; the first check soon after launch.
+    /// Every six hours while the setting is on; the first soon after launch.
     public func startAutomaticChecks() {
         guard automatic == nil, repository != nil else { return }
         automatic = Task { [weak self] in
@@ -380,9 +380,6 @@ public final class Updater {
         guard let new = Bundle(url: app), new.bundleIdentifier == Bundle.main.bundleIdentifier else {
             throw Failure("the download does not contain Silent Route")
         }
-        // Finder information on the bundle itself (1.6.9-beta's disk image
-        // had it) is outside the signature, but a strict check refuses it.
-        try? await Self.run("/usr/bin/xattr", ["-d", "com.apple.FinderInfo", app.path])
         try await Self.run("/usr/bin/codesign", ["--verify", "--strict", app.path])
         // Downloaded by the app, not a browser — but clear it anyway so
         // the relaunch never stops at a Gatekeeper prompt.

@@ -1,4 +1,5 @@
 import Foundation
+import SystemConfiguration
 import VPNCore
 
 public struct SystemNetwork: NetworkInspector {
@@ -113,7 +114,7 @@ public struct SystemNetwork: NetworkInspector {
         let repair = Self.needsRouteRepair(routeInterface: iface,
                                            interfaceExists: iface.map { if_nametoindex($0) != 0 } ?? false,
                                            isOurTUN: iface != nil && iface == tun)
-        if repair, let gw = await Self.physicalGateway() {
+        if repair, let gw = Self.physicalGateway() {
             await Command.run("/sbin/route", ["-n", "delete", "-net", "0.0.0.0/1"])
             await Command.run("/sbin/route", ["-n", "delete", "-net", "128.0.0.0/1"])
             await Command.run("/sbin/route", ["-n", "delete", "default"])
@@ -163,14 +164,15 @@ public struct SystemNetwork: NetworkInspector {
             .split(separator: ":").last?.trimmingCharacters(in: .whitespaces)
     }
 
-    /// The router of the primary physical interface, from DHCP.
-    static func physicalGateway() async -> String? {
-        for iface in ["en0", "en1", "en2", "en3", "en4", "en5"] {
-            let r = await Command.run("/usr/sbin/ipconfig", ["getoption", iface, "router"], timeout: 5)
-            let gw = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if r.ok, let net = IPNetwork(gw), net.family == .v4, net.prefix == 32 { return gw }
-        }
-        return nil
+    /// The router of the Mac's primary network service, as macOS's
+    /// configuration daemon has it — whatever carries it (Wi-Fi, Ethernet,
+    /// an adapter, a phone). Never a tunnel's.
+    static func physicalGateway() -> String? {
+        guard let store = SCDynamicStoreCreate(nil, "Silent Route" as CFString, nil, nil),
+              let g = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
+              let iface = g["PrimaryInterface"] as? String, !iface.hasPrefix("utun"),
+              let gw = g["Router"] as? String, let net = IPNetwork(gw), net.family == .v4, net.prefix == 32 else { return nil }
+        return gw
     }
 
     static func processRunning(_ names: [String]) -> Bool {

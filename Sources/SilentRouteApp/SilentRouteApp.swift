@@ -94,8 +94,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func command(_ c: WindowCommand) {
         let fresh = mainWindow == nil
         showMainWindow()
-        // A window made just now listens once its view has appeared.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (fresh ? 0.3 : 0)) { c.post() }
+        // A window made just now carries it out once its view has appeared.
+        c.post(waitingForWindow: fresh)
     }
 
     func openHelp() {
@@ -307,9 +307,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard UserDefaults.standard.bool(forKey: key) else { return }
         UserDefaults.standard.removeObject(forKey: key)
         Task {
-            for _ in 0..<40 where model.helper == .unknown {
-                try? await Task.sleep(for: .milliseconds(250))
-            }
+            // Where the helper stands now, asked rather than waited for.
+            await model.refresh()
             if model.helperOutdated { await model.installHelper() }
             if [.connecting, .reconnecting].contains(model.status.phase) { Updater.shared.resuming = true }
         }

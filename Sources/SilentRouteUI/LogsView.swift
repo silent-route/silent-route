@@ -28,6 +28,8 @@ struct LogsView: View {
         }
         .task { await refreshList(selectNewest: true) }
         .task(id: selected) { await follow() }
+        // A session began or ended.
+        .onChange(of: model.sessionLog) { _, _ in Task { await refreshList(selectNewest: false) } }
         .fileExporter(isPresented: Binding(get: { saving != nil }, set: { if !$0 { saving = nil } }),
                       document: saving, contentType: .plainText,
                       defaultFilename: savingName ?? selected.map { $0.replacingOccurrences(of: ".log", with: "") } ?? "Silent Route log") { _ in
@@ -41,7 +43,9 @@ struct LogsView: View {
         Group {
             if loaded && sessions.isEmpty {
                 ContentUnavailableView("No Sessions Yet", systemImage: "doc.text",
-                                       description: Text("Each time you turn the VPN on, its session is logged here and in ~/Library/Logs/Silent Route. The last 30 are kept, and only you can see yours — other users of this Mac see only their own."))
+                                       description: Text(model.keptSessions == 0
+                                                         ? "Session logs are turned off in Settings › Advanced."
+                                                         : "Each time you turn the VPN on, its session is logged here and in ~/Library/Logs/Silent Route. The last \(model.keptSessions) are kept, and only you can see yours — other users of this Mac see only their own."))
             } else {
                 // The standard look, like the profiles in the sidebar.
                 List(sessions, selection: $selected) { s in
@@ -161,8 +165,8 @@ struct LogsView: View {
     // MARK: Loading
 
     private func refreshList(selectNewest: Bool) async {
-        let store = self.store
-        sessions = await Task.detached { store.sessions() }.value
+        let store = self.store, current = model.sessionLog
+        sessions = await Task.detached { store.sessions(current: current) }.value
         loaded = true
         if selectNewest, selected == nil { selected = sessions.first?.id }
     }
@@ -208,6 +212,7 @@ private struct SessionRow: View {
         var parts: [String] = []
         if !session.profile.isEmpty { parts.append(session.profile) }
         if let end = session.ended { parts.append(Self.duration(end.timeIntervalSince(session.started))) }
+        if session.interrupted { parts.append("cut short") }
         parts.append(Format.bytes(Int64(session.bytes)))
         return parts.joined(separator: " · ")
     }

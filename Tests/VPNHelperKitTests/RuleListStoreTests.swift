@@ -7,6 +7,7 @@ import VPNCore
     static let binary = Data("SRS\u{3}one".utf8)
     static let newer = Data("SRS\u{3}two".utf8)
     static let a = "https://lists.example/a.srs"
+    static let b = "https://lists.example/b.srs"
     static let text = "https://lists.example/sites.txt"
 
     final class Server: @unchecked Sendable {
@@ -174,22 +175,28 @@ import VPNCore
         #expect(await store.info(["file:///etc/master.passwd"]).isEmpty)
     }
 
-    /// The daily check finds every list on disk by its note.
-    @Test func refreshFindsListsOnDisk() async throws {
+    /// The daily check: lists in use again once a day old; the rest go.
+    @Test func refreshKeepsListsInUseFreshAndRemovesTheRest() async throws {
         let server = Server()
         server.answers[Self.a] = (200, Self.binary)
+        server.answers[Self.b] = (200, Self.binary)
         var clock = Date()
         let box = ClockBox(clock)
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rules-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
         let store = RuleListStore(dir: dir, fetch: { try await server.fetch($0) }, tool: Self.tool(), now: { box.now })
-        await store.update([Self.a], olderThan: 0)
-        await store.refreshStale()
-        #expect(server.requests.count == 1)
+        await store.update([Self.a, Self.b], olderThan: 0)
+        await store.refresh(inUse: [Self.a, Self.b])
+        #expect(server.requests.count == 2)
         clock.addTimeInterval(RuleListStore.maxAge + 60)
         box.now = clock
-        await store.refreshStale()
-        #expect(server.requests.count == 2)
+        // b left every profile: removed, not fetched.
+        await store.refresh(inUse: [Self.a])
+        #expect(server.requests.count == 3)
+        #expect(await store.local([Self.a, Self.b]).keys.sorted() == [Self.a])
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.hasPrefix(RuleLists.fileKey(Self.b)) }.isEmpty)
     }
 
     final class ClockBox: @unchecked Sendable {

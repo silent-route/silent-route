@@ -75,13 +75,17 @@ public struct LogSession: Codable, Equatable, Sendable, Identifiable {
     public var started: Date
     /// Nil while the session is still going.
     public var ended: Date?
+    /// It ended without saying so (the Mac lost power, or the helper
+    /// stopped): `ended` is when its file was last written.
+    public var interrupted: Bool
     public var profile: String
     public var bytes: Int
 
-    public init(id: String, started: Date, ended: Date?, profile: String, bytes: Int) {
+    public init(id: String, started: Date, ended: Date?, interrupted: Bool = false, profile: String, bytes: Int) {
         self.id = id
         self.started = started
         self.ended = ended
+        self.interrupted = interrupted
         self.profile = profile
         self.bytes = bytes
     }

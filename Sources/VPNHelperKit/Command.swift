@@ -57,8 +57,14 @@ public enum Command {
                 try? inPipe.fileHandleForWriting.write(contentsOf: Data(input.utf8))
                 try? inPipe.fileHandleForWriting.close()
             }
+            // Past the timeout: asked to stop, then made to (a tool stuck in
+            // the kernel may not heed SIGTERM, and the caller would wait forever).
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                if p.isRunning { p.terminate() }
+                guard p.isRunning else { return }
+                p.terminate()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                    if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+                }
             }
         }
     }

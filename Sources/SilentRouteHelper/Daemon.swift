@@ -44,7 +44,7 @@ enum Daemon {
         try? fm.removeItem(at: paths.migrateOwner)
         let version = (try? String(contentsOf: paths.version, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? "dev"
-        let env = SingBoxConfig.Environment(cacheFile: paths.cache.path, clashAPIPort: freePort(), clashAPISecret: "")
+        let env = SingBoxConfig.Environment(cacheFile: paths.cache.path, clashAPIPort: 0, clashAPISecret: "")
 
         // Session logs go into the home of whoever turned the VPN on. Earlier
         // builds kept a shared sing-box.log (readable by every user), root's
@@ -57,7 +57,7 @@ enum Daemon {
                                   fetch: RuleListStore.curl(trampoline: paths.helper.path, group: group, scratch: paths.run),
                                   tool: { await engine.ruleSet($0) })
         var options = Controller.Options(singBoxGroup: group, configEnvironment: env)
-        options.captivePort = freePort()
+        options.localPorts = { LocalPorts.free($0) }
         options.ruleLists = .init(local: { await lists.local($0) },
                                   fetchMissing: { p in await lists.update(RuleLists.urls(p), olderThan: .infinity) })
         let controller = Controller(
@@ -65,15 +65,15 @@ enum Daemon {
             pf: SystemPacketFilter(), engine: engine, network: SystemNetwork(),
             store: FileStateStore(url: paths.state), clock: SystemClock())
         let profiles = ProfileManager(controller: controller, usersDir: paths.users, ownerFile: paths.owner)
-        let service = Service(controller: controller, profiles: profiles, apiPort: env.clashAPIPort, version: version,
+        let service = Service(controller: controller, profiles: profiles, version: version,
                               sessionLog: sessionLog, engine: engine, paths: paths, group: group, lists: lists)
 
-        // Lists: every one on disk checked once a day.
+        // Lists: those in use checked once a day, the rest removed.
         Task {
             await lists.removeLegacy()
             await lists.upgrade()
             while true {
-                await lists.refreshStale()
+                await lists.refresh(inUse: await profiles.listsInUse())
                 try? await Task.sleep(for: .seconds(3600))
             }
         }
@@ -85,7 +85,7 @@ enum Daemon {
             // resumed session's log is theirs.
             if let p = await profiles.ownerProfile() { try? await controller.update(profile: p) }
             if let owner = await profiles.owner {
-                sessionLog.setOwner(owner)
+                sessionLog.setOwner(owner, keep: await profiles.keptSessions(of: owner))
                 // A resumed session logs as its owner chose.
                 await controller.setLogLevel(await profiles.logLevel(of: owner))
             }
@@ -134,6 +134,7 @@ enum Daemon {
                 last = now
                 await controller.healthTick()
                 sessionLog.enforceLimit()
+                Daemon.trimOwnLog()
             }
         }
 
@@ -175,6 +176,24 @@ enum Daemon {
         }
     }
 
+    /// helper.log (stderr, opened by launchd for appending) is kept under
+    /// 4 MB, like every log: past that only its last 1 MB stays.
+    static func trimOwnLog(max: Int = 4_000_000, keep: Int = 1_000_000) {
+        var st = stat()
+        guard fstat(STDERR_FILENO, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, Int(st.st_size) > max,
+              // Appending: after the cut, writes land at the new end.
+              fcntl(STDERR_FILENO, F_GETFL) & O_APPEND != 0 else { return }
+        var tail = [UInt8](repeating: 0, count: keep)
+        let n = pread(STDERR_FILENO, &tail, keep, off_t(Int(st.st_size) - keep))
+        guard n > 0 else { return }
+        // From the first whole line on.
+        let start = (tail[..<n].firstIndex(of: UInt8(ascii: "\n")) ?? -1) + 1
+        guard ftruncate(STDERR_FILENO, 0) == 0 else { return }
+        let note = "… earlier lines removed to keep this file small …\n"
+        _ = note.withCString { write(STDERR_FILENO, $0, strlen($0)) }
+        _ = tail[start..<n].withUnsafeBytes { write(STDERR_FILENO, $0.baseAddress, $0.count) }
+    }
+
     /// What earlier builds left in /Library/Logs/Silent Route. Only from
     /// that folder as root made it — a real folder of root's, not a link —
     /// so a path someone else prepared never leads the removal elsewhere.
@@ -185,24 +204,6 @@ enum Daemon {
         for name in ["sing-box.log", "sing-box.log.1", "sessions", "last-owner"] {
             try? fm.removeItem(at: paths.logs.appendingPathComponent(name))
         }
-    }
-
-    /// A free localhost port for the clash API, chosen once per helper run.
-    static func freePort() -> UInt16 {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        defer { close(fd) }
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
-        addr.sin_port = 0
-        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let ok = withUnsafeMutablePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, len) == 0 && getsockname(fd, $0, &len) == 0
-            }
-        }
-        return ok ? UInt16(bigEndian: addr.sin_port) : 19090
     }
 }
 
@@ -228,7 +229,6 @@ final class ListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendab
 final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     let controller: Controller
     let profiles: ProfileManager
-    let apiPort: UInt16
     let version: String
     let sessionLog: SessionLog
     let engine: SingBoxEngine
@@ -237,7 +237,7 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     let lists: RuleListStore
     private let probes = Gate(limit: 3)
 
-    init(controller: Controller, profiles: ProfileManager, apiPort: UInt16, version: String, sessionLog: SessionLog,
+    init(controller: Controller, profiles: ProfileManager, version: String, sessionLog: SessionLog,
          engine: SingBoxEngine, paths: Paths, group: UInt32, lists: RuleListStore) {
         self.lists = lists
         self.sessionLog = sessionLog
@@ -246,7 +246,6 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
         self.group = group
         self.controller = controller
         self.profiles = profiles
-        self.apiPort = apiPort
         self.version = version
     }
 
@@ -281,6 +280,8 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                              library: library ? lib : nil, api: api, helperVersion: version)
         r.otherUsersVPN = mine ? nil : true
         r.detailedLogs = await profiles.detailedLogs(of: uid)
+        r.keptSessions = await profiles.keptSessions(of: uid)
+        r.sessionLog = sessionLog.currentFile(of: uid)
         return r
     }
 
@@ -298,7 +299,8 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
             case .start:
                 // The user turning it on owns it: their active profile runs.
                 let log = sessionLog
-                try await profiles.start(by: uid, beforeStart: { log.setOwner(uid) })
+                let keep = await profiles.keptSessions(of: uid)
+                try await profiles.start(by: uid, beforeStart: { log.setOwner(uid, keep: keep) })
             case .stop:
                 // Anyone at the Mac may turn it off: their traffic goes through it too.
                 await controller.stop()
@@ -334,7 +336,7 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 let report: Probe.Report
                 do {
                     binary = try engine.verifiedBinary()
-                    report = try await Probe.run(t, singBox: binary, socksPort: Daemon.freePort(),
+                    report = try await Probe.run(t, singBox: binary,
                                                  launcher: [paths.helper.path, "exec-engine", String(group)], direct: true)
                 } catch {
                     await probes.leave()
@@ -358,6 +360,9 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 return r
             case .setDetailedLogs(let on):
                 await profiles.setDetailedLogs(on, by: uid)
+            case .setKeptSessions(let n):
+                let kept = await profiles.setKeptSessions(n, by: uid)
+                sessionLog.setKeep(kept, for: uid)
             case .captiveLogin:
                 // A way past the kill switch for one window: the owner's alone.
                 let owner = await profiles.owner
@@ -370,10 +375,10 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
             case .apiCredentials:
                 // Live connections show what the owner is doing: theirs alone.
                 let owner = await profiles.owner
-                guard uid == 0 || owner == uid, let secret = await controller.currentAPISecret else {
+                guard uid == 0 || owner == uid, let api = await controller.currentAPI else {
                     return await respond(uid, error: "Not connected")
                 }
-                return await respond(uid, api: .init(port: Int(apiPort), secret: secret))
+                return await respond(uid, api: .init(port: Int(api.port), secret: api.secret))
             }
         } catch {
             return await respond(uid, error: "\(error)")

@@ -69,6 +69,11 @@ public final class AppModel {
     public private(set) var otherUsersVPN = false
     /// This user's sessions log every connection (kept by the helper).
     public private(set) var detailedLogs = false
+    /// How many of this user's sessions are kept (by the helper).
+    public private(set) var keptSessions = SessionLogFormat.defaultKept
+    /// The file this user's running session is written to, as the helper
+    /// says; nil when none is (or the helper does not answer).
+    public private(set) var sessionLog: String?
     public private(set) var library = ProfileLibrary()
     public private(set) var speed: Speed?
     /// Bytes since the uptime's start (`uptimeSince`). sing-box counts from
@@ -187,6 +192,8 @@ public final class AppModel {
         if let v = r.helperVersion { helperVersion = v }
         otherUsersVPN = r.otherUsersVPN ?? false
         if let d = r.detailedLogs { detailedLogs = d }
+        if let k = r.keptSessions { keptSessions = k }
+        if r.status != nil { sessionLog = r.sessionLog }
         activeProfile = r.activeProfile
         if let lib = r.library {
             library = lib
@@ -305,6 +312,12 @@ public final class AppModel {
     public func setDetailedLogs(_ on: Bool) async {
         detailedLogs = on
         await run(.setDetailedLogs(on))
+    }
+
+    /// Older sessions are deleted at once.
+    public func setKeptSessions(_ n: Int) async {
+        keptSessions = n
+        await run(.setKeptSessions(n))
     }
 
     public func activate(_ id: Profile.ID) async {

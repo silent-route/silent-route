@@ -120,6 +120,16 @@ public actor ProfileManager {
         return lib
     }
 
+    /// The lists any user's profiles use.
+    public func listsInUse() -> Set<String> {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: usersDir.path)) ?? []
+        var urls: Set<String> = []
+        for uid in names.compactMap(uid_t.init) {
+            for p in library(of: uid).profiles { urls.formUnion(RuleLists.urls(p)) }
+        }
+        return urls
+    }
+
     /// Bumped on every change of a user's library, so their clients refetch.
     public func revision(of uid: uid_t) -> Int { revisions[uid, default: 0] }
 
@@ -155,7 +165,8 @@ public actor ProfileManager {
     /// says why.
     private func commit(_ uid: uid_t, _ change: (inout ProfileLibrary) throws(ProfileLibrary.Failure) -> Void) throws(Failure) {
         var lib = library(of: uid)
-        do { try change(&lib) } catch { return }
+        // Checked before the await, but the library may have changed since.
+        do { try change(&lib) } catch { throw Failure(error.description) }
         let store = Self.store(in: usersDir, for: uid)
         try? FileManager.default.createDirectory(at: store.url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
@@ -166,31 +177,61 @@ public actor ProfileManager {
 
     // MARK: Per-user settings the helper applies
 
-    private var detailed: [uid_t: Bool] = [:]
+    /// Each user's log settings, as read from their settings.json.
+    private var settings: [uid_t: LogSettings] = [:]
+
+    struct LogSettings: Codable {
+        var detailedLogs: Bool?
+        var keptSessions: Int?
+    }
 
     private nonisolated func settingsURL(_ uid: uid_t) -> URL {
         usersDir.appendingPathComponent(String(uid)).appendingPathComponent("settings.json")
     }
 
-    /// Whether this user's sessions log every connection.
-    public func detailedLogs(of uid: uid_t) -> Bool {
-        if let d = detailed[uid] { return d }
-        struct Settings: Decodable { var detailedLogs: Bool? }
-        let d = (try? Data(contentsOf: settingsURL(uid))).flatMap { try? JSONDecoder().decode(Settings.self, from: $0) }?.detailedLogs ?? false
-        detailed[uid] = d
-        return d
+    private func logSettings(of uid: uid_t) -> LogSettings {
+        if let s = settings[uid] { return s }
+        let s = (try? Data(contentsOf: settingsURL(uid))).flatMap { try? JSONDecoder().decode(LogSettings.self, from: $0) }
+            ?? LogSettings()
+        settings[uid] = s
+        return s
     }
+
+    private func save(_ s: LogSettings, of uid: uid_t) {
+        settings[uid] = s
+        let url = settingsURL(uid)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        let data = (try? JSONEncoder().encode(s)) ?? Data()
+        FileManager.default.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600])
+    }
+
+    /// Whether this user's sessions log every connection.
+    public func detailedLogs(of uid: uid_t) -> Bool { logSettings(of: uid).detailedLogs ?? false }
 
     /// Takes effect from this user's next session: a session keeps the
     /// level it began with, so one log file has one level.
     public func setDetailedLogs(_ on: Bool, by uid: uid_t) {
-        detailed[uid] = on
-        let url = settingsURL(uid)
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
-        let data = (try? JSONSerialization.data(withJSONObject: ["detailedLogs": on])) ?? Data()
-        FileManager.default.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600])
+        var s = logSettings(of: uid)
+        s.detailedLogs = on
+        save(s, of: uid)
     }
+
+    /// How many of this user's sessions are kept, the running one included.
+    public func keptSessions(of uid: uid_t) -> Int {
+        logSettings(of: uid).keptSessions.map(Self.clampKept) ?? SessionLogFormat.defaultKept
+    }
+
+    /// Returns the number kept, within `keptSessionsRange`.
+    @discardableResult
+    public func setKeptSessions(_ n: Int, by uid: uid_t) -> Int {
+        var s = logSettings(of: uid)
+        s.keptSessions = Self.clampKept(n)
+        save(s, of: uid)
+        return s.keptSessions!
+    }
+
+    static func clampKept(_ n: Int) -> Int { min(max(n, SessionLogFormat.keptRange.lowerBound), SessionLogFormat.keptRange.upperBound) }
 
     /// The session's sing-box log level: every connection, or problems only.
     public func logLevel(of uid: uid_t) -> String { detailedLogs(of: uid) ? "info" : "warn" }

@@ -238,7 +238,9 @@ struct Harness {
                                                 ($0.url, .init(path: "/tmp/rules/\($0.name).srs", namesPath: nil))
                                             }))
         var options = Controller.Options(singBoxGroup: 4242, configEnvironment: env)
-        options.captivePort = captivePort
+        if let captivePort {
+            options.localPorts = { n in (0..<n).map { captivePort + UInt16($0) } }
+        }
         options.ruleLists = ruleLists
         controller = Controller(profile: profile, options: options,
                                 pf: FakePF(world: world), engine: FakeEngine(world: world),

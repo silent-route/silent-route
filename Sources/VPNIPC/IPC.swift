@@ -14,7 +14,7 @@ import VPNRuntime
 public enum IPC {
     /// Bumped on any incompatible change; the app asks to reinstall the
     /// helper on a mismatch.
-    public static let protocolVersion = 12
+    public static let protocolVersion = 13
     public static let machService = "org.silentroute.app.helper"
 
     /// Clients the helper accepts. Each must be signed by the same
@@ -43,6 +43,9 @@ public enum IPC {
         /// This user's sessions log every connection (sing-box at "info"),
         /// from their next session on.
         case setDetailedLogs(Bool)
+        /// How many of this user's sessions are kept (0: none are logged);
+        /// older ones go at once.
+        case setKeptSessions(Int)
         /// The state of these lists (by address): size, date, last error.
         case ruleLists([String])
         /// Download these lists now, then answer as ruleLists.
@@ -80,6 +83,11 @@ public enum IPC {
         public var probe: Probe.Report?
         /// This user's sessions log every connection (see setDetailedLogs).
         public var detailedLogs: Bool?
+        /// How many of this user's sessions are kept (see setKeptSessions).
+        public var keptSessions: Int?
+        /// The file this user's running session is written to: the one
+        /// session the app shows as still going.
+        public var sessionLog: String?
         /// Only for ruleLists and updateRuleLists.
         public var ruleLists: [RuleListInfo]?
 

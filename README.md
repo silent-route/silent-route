@@ -32,7 +32,7 @@ Intel and Apple Silicon, macOS 14 Sonoma through macOS 27 Golden Gate.
 
 **Everything else**
 - Profiles belong to each macOS user; on a shared Mac nobody sees another's servers or passwords.
-- Session logs in `~/Library/Logs/Silent Route` (owner-only, last 30 sessions), shown under Logs with a problems filter and export without addresses. Optionally every connection is logged (Settings › Advanced).
+- Session logs in `~/Library/Logs/Silent Route` (owner-only; the last 30 sessions by default, any number from 0 to 1000 in Settings › Advanced; at most 4 MB each), shown under Logs with a problems filter and export without addresses. The running session's file is append-only while it is written, so a cleaning app cannot cut it short; files such an app empties are removed. Optionally every connection is logged (Settings › Advanced).
 - Notifications when a route fails over, goes direct, is blocked or recovers.
 - Advanced options, off by default: tunnel MTU, multiplexing, TLS fragmentation for direct routes, UDP through a SOCKS5 proxy.
 - A native Mac app by Apple's Human Interface Guidelines: the VPN switch at the top of the sidebar, actions in the toolbar and the menu bar with shortcuts, Liquid Glass on macOS 26.
@@ -104,7 +104,7 @@ Settings › Uninstall Silent Route…, the `Uninstall Silent Route.command` in 
 - **Kill switch:** sing-box runs with the `_silentroute` group, and the pf anchor `com.apple/silentroute` passes only that group's traffic on physical interfaces (plus loopback, DHCP and, optionally, the LAN). Anything not sent by sing-box is dropped, whatever the routing table says. The main ruleset and other anchors are left alone.
 - **Failover:** every 10 seconds the helper measures the servers in use through the clash API and picks, per route, the first that answers. If sing-box exits, the pf rules stay and the helper reconnects with backoff.
 - **Integrity:** binaries are copied into root-owned directories, and sing-box's SHA-256 is checked against `singbox.pin` before each launch. Logs are written into the user's folder without following symlinks, as new 0600 files.
-- **Lists:** the helper downloads a profile's lists into a root-only folder, checks them daily, and swaps a file only after sing-box has read it whole; a running VPN picks up a new version without reconnecting.
+- **Lists:** the helper downloads a profile's lists into a root-only folder, checks the ones profiles use daily (and removes those no profile uses any more), and swaps a file only after sing-box has read it whole; a running VPN picks up a new version without reconnecting.
 
 Every connection Silent Route makes or lets through, DNS and the Wi-Fi login are described in [docs/network.md](docs/network.md) — in short, apart from your traffic only server checks, rule-set downloads, the login check and update checks go out; no telemetry. Design notes and test results: [docs/decisions.md](docs/decisions.md).
 

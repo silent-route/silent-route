@@ -151,7 +151,8 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
     }
 
     public func terminate(pid: Int32) async {
-        guard pid > 1 else { return }
+        // Only a sing-box: one that already ended may have handed its PID on.
+        guard pid > 1, await isRunning(pid: pid) else { return }
         if kill(pid, SIGTERM) != 0 { return }
         for _ in 0..<30 {                          // 3 s grace
             if kill(pid, 0) != 0 { return }
@@ -167,7 +168,7 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
         // As root, kill(pid, 0) is truthful (a user process probing a root
         // one gets EPERM). Also make sure it is not a reused PID.
         guard pid > 1, kill(pid, 0) == 0 else { return false }
-        if lock.withLock({ processes[pid] != nil }) { return true }
+        if lock.withLock({ processes[pid]?.isRunning == true }) { return true }
         return Self.executablePath(of: pid) == paths.singBox.path
     }
 
@@ -228,11 +229,11 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
     }
 
 
-    /// Keep the log bounded: at 5 MB the current file becomes .1.
+    /// Keep the log bounded, like every log: at 4 MB the current file becomes .1.
     func rotateLog() {
         let fm = FileManager.default
         guard let size = (try? fm.attributesOfItem(atPath: paths.singBoxLog.path))?[.size] as? NSNumber,
-              size.intValue > 5_000_000 else { return }
+              size.intValue > 4_000_000 else { return }
         let old = paths.singBoxLog.appendingPathExtension("1")
         try? fm.removeItem(at: old)
         try? fm.moveItem(at: paths.singBoxLog, to: old)

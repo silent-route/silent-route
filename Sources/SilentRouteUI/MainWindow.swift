@@ -100,6 +100,7 @@ public struct MainWindow: View {
             if selection == nil {
                 selection = (model.library.activeID ?? model.library.profiles.first?.id).map(Item.profile)
             }
+            if let c = WindowCommand.takePending() { perform(c) }
         }
         .onChange(of: model.library.profiles.map(\.id)) { _, ids in
             if case .profile(let s) = selection, ids.contains(s) { return }
@@ -519,8 +520,21 @@ public enum WindowCommand: String, Sendable {
 
     public static let notification = Notification.Name("SilentRouteWindowCommand")
 
-    @MainActor public func post() {
-        NotificationCenter.default.post(name: Self.notification, object: rawValue)
+    /// For a window whose view has not appeared yet, `waitingForWindow`:
+    /// kept until it has, and carried out then.
+    @MainActor public func post(waitingForWindow: Bool = false) {
+        if waitingForWindow {
+            Self.pending = self
+        } else {
+            NotificationCenter.default.post(name: Self.notification, object: rawValue)
+        }
+    }
+
+    @MainActor private static var pending: WindowCommand?
+
+    @MainActor static func takePending() -> WindowCommand? {
+        defer { pending = nil }
+        return pending
     }
 }
 
