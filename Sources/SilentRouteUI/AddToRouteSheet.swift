@@ -282,6 +282,11 @@ struct AddToRouteSheet: View {
             error = e
             return
         }
+        // Unsaved changes to the profile get it too: saving them later must
+        // not take it away again.
+        if let draft = model.drafts[updated.id], let merged = RouteAddition.apply(item, to: to, in: draft) {
+            model.edit(merged)
+        }
         let routeName = route?.name ?? routeNameOrSuggestion
         model.notice = .init("Added to the route “\(routeName)” of “\(updated.name)”", isError: false)
         dismiss()

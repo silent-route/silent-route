@@ -12,6 +12,14 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     /// the screen's sides.
     private static let gap: CGFloat = 5
     private static let margin: CGFloat = 6
+    /// How far the menu bar's highlight reaches past the item's button on
+    /// each side (measured on macOS 15: the same for the system's items and
+    /// for others, whatever their width). The system's own menus line up
+    /// with the highlight's edge, and so does the panel. Not measured on
+    /// macOS 26: there it lines up with the button, as before.
+    private static var highlightOutset: CGFloat {
+        if #available(macOS 26, *) { 0 } else { 10 }
+    }
     static var cornerRadius: CGFloat {
         if #available(macOS 26, *) { 18 } else { 11 }
     }
@@ -61,13 +69,27 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     func show(below button: NSStatusBarButton) {
         guard let bw = button.window else { return }
         self.button = button
-        anchor = bw.convertToScreen(button.convert(button.bounds, to: nil))
+        let inButton = bw.convertToScreen(button.convert(button.bounds, to: nil))
+        anchor = inButton.insetBy(dx: -Self.highlightOutset, dy: 0)
         applyTransparency()
         place()
         makeKeyAndOrderFront(nil)
         refreshShadow()
-        button.highlight(true)
+        highlight(button)
         watchOutsideClicks()
+    }
+
+    /// The icon stays highlighted while the panel is open, as a menu's
+    /// does. Mouse clicks never reach the button (the app delegate takes
+    /// them), so nothing turns it off. An accessibility press goes through
+    /// the button, which clears its highlight once its action has run: it
+    /// is set again after that.
+    private func highlight(_ button: NSStatusBarButton) {
+        button.highlight(true)
+        DispatchQueue.main.async { [weak self, weak button] in
+            guard let self, let button, self.isVisible, self.button === button else { return }
+            button.highlight(true)
+        }
     }
 
     func dismiss() {

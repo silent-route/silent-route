@@ -84,7 +84,36 @@ enum Fixtures {
         p.lan = .allow
         p.dns.localZones = []
         rules = try SingBoxConfig.generate(p, env: Fixtures.env)["dns"]?["rules"]
-        #expect(!(rules?.text.contains("dns-local") ?? true))
+        guard case .array(let list)? = rules else { Issue.record("no dns rules"); return }
+        // Only the private addresses' names, nothing the user listed.
+        #expect(list.filter { $0["server"] == "dns-local" }.count == 1)
+        #expect(list.first?["domain_suffix"] == .strings(SingBoxConfig.privateReverseZones))
+    }
+
+    /// Names of private addresses never go out through a tunnel: the
+    /// router answers them, or no one does.
+    @Test func privateAddressNamesStayLocal() throws {
+        func firstRule(_ p: Profile) throws -> JSON? {
+            guard case .array(let rules)? = try SingBoxConfig.generate(p, env: Fixtures.env)["dns"]?["rules"] else { return nil }
+            return rules.first
+        }
+        var p = Fixtures.profile
+        p.lan = .allow
+        var first = try firstRule(p)
+        #expect(first?["server"] == "dns-local")
+        p.lan = .block
+        first = try firstRule(p)
+        #expect(first?["action"] == "predefined")
+        #expect(first?["rcode"] == "NXDOMAIN")
+        guard case .array(let zones)? = first?["domain_suffix"] else { Issue.record("no zones"); return }
+        for z in ["168.192.in-addr.arpa", "10.in-addr.arpa", "16.172.in-addr.arpa", "31.172.in-addr.arpa",
+                  "254.169.in-addr.arpa", "64.100.in-addr.arpa", "127.100.in-addr.arpa", "d.f.ip6.arpa", "8.e.f.ip6.arpa"] {
+            #expect(zones.contains(.string(z)), "\(z)")
+        }
+        // Public neighbours stay out.
+        for z in ["15.172.in-addr.arpa", "32.172.in-addr.arpa", "63.100.in-addr.arpa", "128.100.in-addr.arpa"] {
+            #expect(!zones.contains(.string(z)), "\(z)")
+        }
     }
 
     @Test func advancedOptionsAreChecked() {
@@ -229,15 +258,16 @@ enum Fixtures {
         guard case .array(let rules)? = cfg["dns"]?["rules"] else { Issue.record("no dns rules"); return }
         // Local names → the router; the domestic zones and site lists →
         // direct resolver, "Work" → direct, "Ads" → rejected, then the defaults.
-        #expect(rules[0]["domain_suffix"] == ["lan", "home.arpa", "internal"])
-        #expect(rules[0]["server"] == "dns-local")
+        #expect(rules[0]["domain_suffix"] == .strings(SingBoxConfig.privateReverseZones))
+        #expect(rules[1]["domain_suffix"] == ["lan", "home.arpa", "internal"])
+        #expect(rules[1]["server"] == "dns-local")
         // Only the lists that match names: an address list says nothing
         // about a name before it is looked up.
-        #expect(rules[1]["rule_set"] == ["list-geosite-cn", "list-geosite-geolocation-cn"])
-        #expect(rules[1]["server"] == "dns-direct")
-        #expect(rules[2]["domain_suffix"] == ["corp.example"])
+        #expect(rules[2]["rule_set"] == ["list-geosite-cn", "list-geosite-geolocation-cn"])
         #expect(rules[2]["server"] == "dns-direct")
-        #expect(rules[3]["action"] == "reject")
+        #expect(rules[3]["domain_suffix"] == ["corp.example"])
+        #expect(rules[3]["server"] == "dns-direct")
+        #expect(rules[4]["action"] == "reject")
         #expect(rules.last?["domain_suffix"] == ["cn", "xn--fiqs8s"])
         #expect(cfg["dns"]?["final"] == .string("dns-r-" + Fixtures.defaultRouteID.uuidString.lowercased()))
     }

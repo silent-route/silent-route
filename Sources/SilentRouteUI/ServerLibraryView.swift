@@ -17,6 +17,7 @@ struct ServerLibraryView: View {
                 }
                 ServerList(title: "Servers", subtitle: "Checked the way the VPN reaches them: directly.",
                            servers: Binding(get: { model.library.servers }, set: { model.setServers($0) }),
+                           checks: model.serverChecks,
                            check: model.helper == .ready ? { [model] t in try await model.probe(t) } : nil,
                            issues: { t in Validation.check(Profile(name: "Library", tunnels: model.library.servers)).filter { $0.tunnel == t.id } },
                            addItems: { fromProfile }, rowItems: { _ in EmptyView() })

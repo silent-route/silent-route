@@ -6,7 +6,8 @@ import VPNRuntime
 /// where traffic goes is decided by the routes. Servers can also come from
 /// the library, and go to it.
 struct ServersSection: View {
-    var check: (@Sendable (Tunnel) async throws -> Probe.Report)? = nil
+    let checks: ServerChecks
+    var check: ServerChecks.Check? = nil
     @Binding var profile: Profile
     /// Live health, only for the running profile.
     let live: [ServerState]
@@ -17,7 +18,7 @@ struct ServersSection: View {
     var body: some View {
         ServerList(title: "Servers",
                    subtitle: "Tunnels and proxies this profile can use. Routes decide which traffic goes through which of them.",
-                   servers: $profile.tunnels, check: check, live: live,
+                   servers: $profile.tunnels, checks: checks, check: check, live: live,
                    detail: { t in
                        let usedBy = profile.allRoutes.filter { $0.servers.contains(t.id) }.map(\.name)
                        return usedBy.isEmpty ? "not used by any route" : "used by \(usedBy.joined(separator: ", "))"
@@ -81,9 +82,10 @@ struct ServerList<AddItems: View, RowItems: View>: View {
     let title: String
     let subtitle: String
     @Binding var servers: [Tunnel]
+    let checks: ServerChecks
     /// The helper's check (direct, past the tunnel and the kill switch),
     /// when it is there; otherwise a local sing-box.
-    var check: (@Sendable (Tunnel) async throws -> Probe.Report)?
+    var check: ServerChecks.Check?
     var live: [ServerState] = []
     /// What else to say about a server, after its address.
     var detail: (Tunnel) -> String? = { _ in nil }
@@ -92,18 +94,11 @@ struct ServerList<AddItems: View, RowItems: View>: View {
     @ViewBuilder var addItems: () -> AddItems
     @ViewBuilder var rowItems: (Tunnel) -> RowItems
     @State private var editing: EditRequest?
-    @State private var probes: [Tunnel.ID: ProbeState] = [:]
 
     struct EditRequest: Identifiable {
         var id = UUID()
         var draft: ServerDraft
         var isNew: Bool
-    }
-
-    enum ProbeState: Equatable {
-        case running
-        case ok(String)
-        case failed(String)
     }
 
     var body: some View {
@@ -114,6 +109,11 @@ struct ServerList<AddItems: View, RowItems: View>: View {
                     Text(subtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 16)
+                if servers.count > 1 {
+                    Button("Check All") { checkAll() }
+                        .disabled(servers.allSatisfy(checks.isPending))
+                        .help("Check every server, a few at a time. The current connection is not touched.")
+                }
                 Menu {
                     Button("Tunnel…") { editing = EditRequest(draft: ServerDraft(kind: .tunnel), isNew: true) }
                     Button("Proxy…") { editing = EditRequest(draft: ServerDraft(kind: .proxy), isNew: true) }
@@ -173,12 +173,7 @@ struct ServerList<AddItems: View, RowItems: View>: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
-                Button { probe(t) } label: {
-                    if probes[t.id] == .running { ProgressView().controlSize(.small) } else { Text("Check") }
-                }
-                .controlSize(.small)
-                .disabled(probes[t.id] == .running)
-                .help("Connect to this server on its own and see where traffic comes out. The current connection is not touched.")
+                checkButton(t)
                 Menu {
                     Button("Edit…", action: edit)
                     if case .link(let l) = t.origin {
@@ -197,15 +192,7 @@ struct ServerList<AddItems: View, RowItems: View>: View {
                     .menuIndicator(.hidden)
                     .fixedSize()
             }
-            Group {
-                switch probes[t.id] {
-                case .ok(let text)?: Label(text, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                case .failed(let text)?: Label(text, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
-                default: EmptyView()
-                }
-            }
-            .font(.caption)
-            .padding(.leading, 32)
+            checkResult(t)
             ForEach(issues(t), id: \.self) { i in
                 Label(Text.sentence(i.message.replacingOccurrences(of: "server \"\(t.name)\": ", with: "")),
                       systemImage: i.severity == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
@@ -232,25 +219,53 @@ struct ServerList<AddItems: View, RowItems: View>: View {
         servers.append(t)
     }
 
-    private func probe(_ t: Tunnel) {
-        probes[t.id] = .running
-        Task {
-            let result: ProbeState
-            if let check = check ?? SingBoxLocator.path.map({ sb in { t in try await Probe.run(t, singBox: sb) } }) {
-                do {
-                    let r = try await check(t)
-                    var text = "Exit: \([r.city, r.country].compactMap { $0 }.joined(separator: ", ")) · \(r.ip) · \(r.latencyMs) ms"
-                    if !r.warnings.isEmpty { text += " · " + r.warnings.joined(separator: "; ") }
-                    result = .ok(text)
-                } catch {
-                    result = .failed(Text.sentence("\(error)"))
+    /// The last result, with when it was found; redrawn each half minute,
+    /// so the age stays right and an old result goes.
+    private func checkResult(_ t: Tunnel) -> some View {
+        TimelineView(.periodic(from: .now, by: 30)) { ctx in
+            let age = checks.finished(t).map { " · " + ServerChecks.age($0, now: ctx.date) } ?? ""
+            Group {
+                switch checks.state(of: t, now: ctx.date) {
+                case .ok(let text)?: Label(text + age, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                case .failed(let text)?: Label(text + age, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                default: EmptyView()
                 }
-            } else {
-                result = .failed("sing-box not found — install the helper first")
             }
-            probes[t.id] = result
+            .font(.caption)
+            .padding(.leading, 32)
         }
     }
+
+    /// Check, or where its check stands: running, or waiting for its turn.
+    private func checkButton(_ t: Tunnel) -> some View {
+        let state = checks.state(of: t)
+        return Button { checks.check(t, using: checker) } label: {
+            switch state {
+            case .running?: ProgressView().controlSize(.small)
+            case .waiting?: Text("Waiting")
+            default: Text("Check")
+            }
+        }
+        .controlSize(.small)
+        .disabled(checks.isPending(t))
+        .help(state == .waiting ? "Waits for the checks before it: a few run at once."
+                                : "Connect to this server on its own and see where traffic comes out. The current connection is not touched.")
+    }
+
+    private func checkAll() {
+        checks.checkAll(servers, using: checker)
+    }
+
+    /// The helper's check, else a local sing-box, else an answer saying why not.
+    private var checker: ServerChecks.Check {
+        if let check { return check }
+        if let sb = SingBoxLocator.path { return { t in try await Probe.run(t, singBox: sb) } }
+        return { _ in throw CheckUnavailable() }
+    }
+}
+
+private struct CheckUnavailable: Error, CustomStringConvertible {
+    var description: String { "sing-box not found — install the helper first" }
 }
 
 /// sing-box for probes: the installed, root-owned copy, else the one in the

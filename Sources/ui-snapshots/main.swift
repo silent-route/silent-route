@@ -192,6 +192,12 @@ MainActor.assumeIsolated {
     render("window-routes", size: win, MainWindow(model: model(.ready, connected, speed: speed), selection: home.id))
     render("logs", size: CGSize(width: 900, height: 420), LogsView(model: model(.ready, connected), store: sampleLogs()))
     renderWindow("full-routes", size: win, MainWindow(model: model(.ready, connected, speed: speed), selection: home.id))
+    // Unsaved changes: Save prominent, "Edited" in the sidebar, the notice.
+    let editing = model(.ready, connected, speed: speed)
+    var homeEdited = home
+    homeEdited.routes.removeLast()
+    editing.edit(homeEdited)
+    renderWindow("full-routes-edited", size: win, MainWindow(model: editing, selection: home.id))
     renderWindow("full-monitor", size: win, MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
     renderWindow("full-monitor-then-profile", size: win, then: { WindowCommand.showActiveProfile.post() },
                  MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
@@ -219,6 +225,15 @@ MainActor.assumeIsolated {
            ProfileEditor(model: model(.ready, connected), saved: home, section: .routes))
     render("server-library", size: CGSize(width: 900, height: 520), ServerLibraryView(model: model(.ready, connected)))
     renderWindow("full-server-library", size: win, MainWindow(model: model(.ready, connected), showServers: true))
+    // Check All with more servers than run at once: some wait their turn.
+    let checking = model(.ready, connected)
+    let many = (1...6).map { i in Tunnel(name: "Server \(i)", server: Endpoint(host: "s\(i).example.org", port: 443),
+                                         proto: .proxy(Proxy(kind: .socks5))) }
+    checking.serverChecks.checkAll(many) { _ in try await Task.sleep(for: .seconds(3600)); throw CancellationError() }
+    var manyProfile = home
+    manyProfile.tunnels = many
+    render("editor-servers-checking", size: CGSize(width: 760, height: 640),
+           ProfileEditor(model: checking, saved: manyProfile, section: .servers))
     render("editor-empty", size: CGSize(width: 760, height: 480), ProfileEditor(model: model(), saved: empty))
     render("window-not-installed", size: win, MainWindow(model: model(.notInstalled, VPNStatus(phase: .off), ProfileLibrary())))
     render("add-tunnel", AddServerSheet(draft: ServerDraft(de), isNew: false, profile: home) { _ in })

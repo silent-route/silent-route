@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.10-beta
+
+Replaces 1.7.5-beta to 1.7.9-beta, which were withdrawn; everything since 1.7.4-beta is here.
+
+- **Unsaved changes are kept.** A profile's edits stay while you look at other pages and profiles; the profile is marked *Edited* in the sidebar and the window's close button shows a dot. Before a profile with unsaved edits is made active or connected, before an update and before quitting, the app asks to save or discard them.
+- **Save stands out.** While a profile has unsaved changes, a blue notice under its name says so, and Revert and Save appear at the trailing end of the toolbar, Save in blue. Both are in the File menu too, with shortcuts: ⇧⌘S and ⇧⌘R, changeable in Settings › General.
+- **Check any number of servers.** Checks no longer fail with "too many at once": a few run at the same time and the rest wait their turn. **Check All** checks every server of a list. A result says how long ago it was found ("5 minutes ago") and goes after an hour; it stays when you go to another page.
+- **Names of private addresses stay on the local network.** Lookups such as "which device is 192.168.1.44" (Bonjour makes many) went through the tunnel to the encrypted DNS server, which then saw the local network's addresses, and failed for a moment after each wake from sleep. They now go to the router when the local network is reachable directly, and are answered "no such name" otherwise.
+- **Update checks on your terms.** Choose how often Silent Route looks for a new version: every 2, 6 (the default), 12, 24, 36 or 48 hours, counted across relaunches. With automatic checks off, no update is offered in the menu bar, even one found earlier, so you can stay on a version you trust; Check Now still looks. When nothing was published since the last look, GitHub's answer is a few bytes.
+- The menu bar icon stays highlighted while its panel is open, without a blink: the panel opens as soon as the mouse button is pressed, as the system's menus do. Its edge lines up with the highlight's, as a system menu's does.
+
 ## 1.7.4-beta
 
 Replaces 1.7.3-beta, which was withdrawn: with a route that sends a country's addresses direct it could not connect. sing-box needs a few seconds to set up that many routes, and the app checked the servers before it was done; it now waits for sing-box to finish starting.

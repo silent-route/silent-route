@@ -72,3 +72,78 @@ import Testing
         #expect(!AppModel.isDefaultName("Home"))
     }
 }
+
+/// GitHub stand-in: answers 200 with an ETag, then 304 when asked with it.
+final class FakeGitHub: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var asked: [String?] = []
+    nonisolated(unsafe) static var body = Data("[]".utf8)
+    static let etag = #"W/"abc""#
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let condition = request.value(forHTTPHeaderField: "If-None-Match")
+        Self.asked.append(condition)
+        let notModified = condition == Self.etag
+        let resp = HTTPURLResponse(url: request.url!, statusCode: notModified ? 304 : 200, httpVersion: nil,
+                                   headerFields: ["ETag": Self.etag])!
+        client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+        if !notModified { client?.urlProtocol(self, didLoad: Self.body) }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+@Suite(.serialized) struct ReleaseListTests {
+    @Test func asksAgainWithTheETagAndUsesTheKeptCopy() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("releases-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [FakeGitHub.self]
+        let list = ReleaseList(cache: dir, session: URLSession(configuration: cfg))
+        FakeGitHub.asked = []
+        FakeGitHub.body = Data("[\(UpdaterTests.release("v9.9.9"))]".utf8)
+
+        let first = try await list.fetch("owner/repo")
+        let second = try await list.fetch("owner/repo")
+        #expect(FakeGitHub.asked == [nil, FakeGitHub.etag])
+        #expect(first == second)
+        #expect(try Updater.pick(from: second, includePrereleases: true)?.version == "9.9.9")
+
+        // Nothing kept: no condition is sent.
+        let fresh = ReleaseList(cache: nil, session: URLSession(configuration: cfg))
+        _ = try await fresh.fetch("owner/repo")
+        #expect(FakeGitHub.asked.last == .some(nil))
+    }
+
+    @MainActor @Test func intervalsAreTheOffered() {
+        let key = Preferences.updateIntervalKey
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.set(5, forKey: key)
+        #expect(Preferences.updateCheckHours == Preferences.defaultUpdateInterval)
+        UserDefaults.standard.set(36, forKey: key)
+        #expect(Preferences.updateCheckHours == 36)
+    }
+}
+
+extension ReleaseListTests {
+    @Test func aDamagedKeptCopyIsDroppedAndAskedAnew() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("releases-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [FakeGitHub.self]
+        let list = ReleaseList(cache: dir, session: URLSession(configuration: cfg))
+        FakeGitHub.body = Data("[]".utf8)
+        _ = try await list.fetch("owner/repo")
+        try Data("not json".utf8).write(to: dir.appendingPathComponent("releases.json"))
+        FakeGitHub.asked = []
+        // Not modified: the damaged copy comes back and does not read…
+        let damaged = try await list.fetch("owner/repo")
+        #expect(throws: DecodingError.self) { try Updater.pick(from: damaged, includePrereleases: true) }
+        // …so it is forgotten, and the next ask is unconditional.
+        list.forget()
+        _ = try await list.fetch("owner/repo")
+        #expect(FakeGitHub.asked == [FakeGitHub.etag, nil])
+    }
+}

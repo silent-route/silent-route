@@ -110,15 +110,34 @@ public final class Updater {
 
     // MARK: Checking
 
-    /// Every six hours while the setting is on; the first soon after launch.
+    /// When updates were last looked for by themselves, across launches:
+    /// a relaunch does not ask GitHub again before it is time.
+    static let lastAutomaticCheckKey = "lastUpdateCheck"
+
+    /// Looks for updates every `Preferences.updateCheckHours` while the
+    /// setting is on, counting from the last look (never in the first
+    /// seconds after launch). Called again whenever the settings change:
+    /// it starts over from them, or stops.
     public func startAutomaticChecks() {
-        guard automatic == nil, repository != nil else { return }
+        automatic?.cancel()
+        automatic = nil
+        guard repository != nil, Preferences.checkForUpdates else { return }
         automatic = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(20))
+            var first = true
             while !Task.isCancelled {
-                guard let self else { return }
-                if Preferences.checkForUpdates { await self.check() }
-                try? await Task.sleep(for: .seconds(6 * 3600))
+                let interval = TimeInterval(Preferences.updateCheckHours) * 3600
+                let last = UserDefaults.standard.object(forKey: Self.lastAutomaticCheckKey) as? Date
+                // A clock set back must not postpone it past one interval.
+                var wait = min(last.map { $0.addingTimeInterval(interval).timeIntervalSinceNow } ?? 0, interval)
+                // Never in the first seconds after launch or a change.
+                if first { wait = max(wait, 20) }
+                first = false
+                if wait > 0 {
+                    do { try await Task.sleep(for: .seconds(wait)) } catch { return }
+                }
+                guard let self, Preferences.checkForUpdates else { return }
+                UserDefaults.standard.set(Date(), forKey: Self.lastAutomaticCheckKey)
+                await self.check()
             }
         }
     }
@@ -145,12 +164,15 @@ public final class Updater {
 
     /// The newest published release that has a disk image.
     nonisolated static func newest(_ repository: String, includePrereleases: Bool) async throws -> Release? {
-        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repository)/releases?per_page=30")!)
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.timeoutInterval = 20
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw Failure("GitHub did not answer") }
-        return try pick(from: data, includePrereleases: includePrereleases)
+        let list = ReleaseList(cache: ReleaseList.defaultCache)
+        do {
+            return try pick(from: try await list.fetch(repository), includePrereleases: includePrereleases)
+        } catch is DecodingError {
+            // A kept copy that no longer reads (damaged, or from a version
+            // that kept something else) is dropped and the list asked anew.
+            list.forget()
+            return try pick(from: try await list.fetch(repository), includePrereleases: includePrereleases)
+        }
     }
 
     /// From GitHub's list of releases: the newest published one that has a
@@ -199,6 +221,11 @@ public final class Updater {
     }
 
     // MARK: Installing
+
+    /// Asked once the update is downloaded, before anything is replaced:
+    /// the app relaunches, so unsaved work is kept or dropped first. False
+    /// stops the update with nothing changed.
+    @ObservationIgnored public var beforeInstall: (@MainActor () async -> Bool)?
 
     public func install() async {
         guard installTask == nil else { return }
@@ -268,6 +295,12 @@ public final class Updater {
             return
         }
         guard !Task.isCancelled else { state = .available(release); return }
+        // Asked here, not before the download: what is edited while it
+        // downloads is asked about too, and stopping still changes nothing.
+        if let ready = beforeInstall, !(await ready()) {
+            state = .available(release)
+            return
+        }
 
         // The helper, from the new version, now: the password is asked while
         // the user is here, not after the relaunch.
@@ -470,5 +503,58 @@ private final class Download: NSObject, URLSessionDownloadDelegate, @unchecked S
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let e = error ?? moveError { continuation?.resume(throwing: e) } else { continuation?.resume() }
         continuation = nil
+    }
+}
+
+/// GitHub's list of releases, asked for with the ETag of the copy kept from
+/// last time: when nothing was published since, GitHub answers "not
+/// modified" — a few bytes, not counted against its limit — and the kept
+/// copy is used.
+struct ReleaseList: Sendable {
+    /// A folder of its own; nil: nothing is kept.
+    let cache: URL?
+    var session: URLSession = .shared
+
+    static var defaultCache: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "org.silentroute.app")
+            .appendingPathComponent("releases")
+    }
+
+    private var body: URL? { cache?.appendingPathComponent("releases.json") }
+    private var tag: URL? { cache?.appendingPathComponent("releases.etag") }
+
+    func fetch(_ repository: String) async throws -> Data {
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repository)/releases?per_page=30")!)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        // Only our own copy decides; never one URLSession kept on its own.
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.timeoutInterval = 20
+        let kept = body.flatMap { try? Data(contentsOf: $0) }
+        if kept != nil, let etag = tag.flatMap({ try? String(contentsOf: $0, encoding: .utf8) }), !etag.isEmpty {
+            req.setValue(etag, forHTTPHeaderField: "If-None-Match")
+        }
+        let (data, resp) = try await session.data(for: req)
+        let http = resp as? HTTPURLResponse
+        if http?.statusCode == 304, let kept { return kept }
+        guard http?.statusCode == 200 else { throw Updater.Failure("GitHub did not answer") }
+        save(data, etag: http?.value(forHTTPHeaderField: "ETag"))
+        return data
+    }
+
+    func forget() {
+        for f in [tag, body].compactMap({ $0 }) { try? FileManager.default.removeItem(at: f) }
+    }
+
+    /// Kept only whole: a list without its ETag, or the other way round,
+    /// is never sent as a condition.
+    private func save(_ data: Data, etag: String?) {
+        guard let cache, let body, let tag else { return }
+        let fm = FileManager.default
+        try? fm.removeItem(at: tag)
+        guard let etag, !etag.isEmpty else { try? fm.removeItem(at: body); return }
+        try? fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        guard (try? data.write(to: body, options: .atomic)) != nil else { return }
+        try? etag.write(to: tag, atomically: true, encoding: .utf8)
     }
 }

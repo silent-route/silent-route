@@ -30,6 +30,10 @@ struct SilentRouteApp: App {
                     .keyboardShortcut("n")
                 Button("Import Profile…") { delegate.command(.importProfile) }
                     .keyboardShortcut("o")
+            }
+            // After Close, as in Apple's File menus: Save, Revert, Export.
+            CommandGroup(replacing: .saveItem) {
+                ProfileEditCommands(model: delegate.model) { delegate.command($0) }
                 Divider()
                 Button("Export Profile…") { delegate.command(.exportProfile) }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
@@ -83,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model = AppModel(backend: XPCBackend())
     private var statusItem: NSStatusItem?
     private var panel: StatusPanel?
+    private var statusClicks: Any?
     private var mainWindow: NSWindow?
     private var updateWindow: NSWindow?
     private var launchedAtLogin = false
@@ -117,8 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !launchedAtLogin { showMainWindow() }
         ready = true
         flushPendingOpens()
+        Updater.shared.beforeInstall = { [model] in await model.resolveAllUnsaved(.update) }
         Updater.shared.startAutomaticChecks()
         watchUpdates()
+        watchUnsaved()
         finishSelfUpdate()
     }
 
@@ -138,35 +145,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Quitting
 
-    /// By default quitting turns the VPN off, after asking. Logout and
-    /// shutdown don't ask; relaunching into an update leaves it as it is
-    /// (the new version reconnects behind the kill switch).
+    /// Unsaved profile changes are saved or discarded first, as the user
+    /// chooses — also at logout, as any Mac app with unsaved work asks.
+    /// Then, by default, quitting turns the VPN off, after asking. Logout
+    /// and shutdown don't ask that; relaunching into an update leaves it as
+    /// it is (the new version reconnects behind the kill switch, and the
+    /// update asked about unsaved changes before it replaced anything).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if quitting || Updater.shared.relaunching || Preferences.quit == .keepRunning { return .terminateNow }
-        let s = model.status
-        guard model.canTurnOff, s.phase != .off || s.killSwitchOn else { return .terminateNow }
-        if !Self.isSystemQuit {
+        if quitting || Updater.shared.relaunching { return .terminateNow }
+        guard !model.unsavedProfiles.isEmpty || vpnNeedsTurningOff else { return .terminateNow }
+        // Only readable while the quit event is being handled.
+        let systemQuit = Self.isSystemQuit
+        let reply = OneShot { sender.reply(toApplicationShouldTerminate: $0) }
+        Task {
             panel?.dismiss()
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "Quit Silent Route?"
-            alert.informativeText = "The VPN turns off and the network goes back to normal.\n\nTo keep the VPN running without the app, change this in Settings."
-            alert.addButton(withTitle: "Disconnect and Quit")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
-        }
-        quitting = true
-        // Wait for the helper, but never hang the quit on it.
-        let reply = OneShot { sender.reply(toApplicationShouldTerminate: true) }
-        Task {
+            guard await model.resolveAllUnsaved(.quit) else {
+                // A save that failed says why in the window.
+                if !model.unsavedProfiles.isEmpty { showMainWindow() }
+                reply.fire(false)
+                return
+            }
+            guard vpnNeedsTurningOff else { return reply.fire(true) }
+            if !systemQuit {
+                NSApp.activate(ignoringOtherApps: true)
+                let alert = NSAlert()
+                alert.messageText = "Quit Silent Route?"
+                alert.informativeText = "The VPN turns off and the network goes back to normal.\n\nTo keep the VPN running without the app, change this in Settings."
+                alert.addButton(withTitle: "Disconnect and Quit")
+                alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return reply.fire(false) }
+            }
+            quitting = true
+            // Wait for the helper, but never hang the quit on it.
+            Task {
+                try? await Task.sleep(for: .seconds(10))
+                reply.fire(true)
+            }
             await model.setOn(false)
-            reply.fire()
-        }
-        Task {
-            try? await Task.sleep(for: .seconds(10))
-            reply.fire()
+            reply.fire(true)
         }
         return .terminateLater
+    }
+
+    /// Quitting turns the VPN off (Settings), and there is something to turn off.
+    private var vpnNeedsTurningOff: Bool {
+        guard Preferences.quit != .keepRunning, model.canTurnOff else { return false }
+        let s = model.status
+        return s.phase != .off || s.killSwitchOn
     }
 
     /// Logout, restart or shutdown asked the app to quit.
@@ -203,21 +228,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 w.setFrame(f, display: false)
             }
             mainWindow = w
+            w.isDocumentEdited = !model.drafts.isEmpty
         }
         mainWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The window's close button shows a dot while any profile has unsaved
+    /// changes, as a document window's does.
+    private func watchUnsaved() {
+        let edited = withObservationTracking {
+            !model.drafts.isEmpty
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.watchUnsaved() }
+        }
+        mainWindow?.isDocumentEdited = edited
     }
 
     // MARK: Status item
 
     private func setUpStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        // The action is for VoiceOver and other accessibility presses;
+        // clicks are taken before the button sees them (below).
         item.button?.target = self
         item.button?.action = #selector(statusItemClicked)
-        // Both buttons open it: right-click is how many people reach a
-        // menu bar item.
-        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
+        watchStatusClicks()
 
         let root = MenuBarView(model: model) { [weak self] in self?.showMainWindow() }
             .fixedSize()
@@ -226,6 +263,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         panel = StatusPanel(rootView: root)
         updateIcon()
+    }
+
+    /// Opens and closes the panel on the press of either mouse button, as
+    /// the system's menu bar items do. The button never tracks the click:
+    /// if it did, it would switch its highlight off when the click ends,
+    /// and the highlight the open panel keeps on it would blink. ⌘-drag,
+    /// which moves the icon, is left to the button.
+    private func watchStatusClicks() {
+        statusClicks = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            let window = event.window.map(ObjectIdentifier.init)
+            let command = event.modifierFlags.contains(.command)
+            let taken = MainActor.assumeIsolated { () -> Bool in
+                guard let self, !command, let button = self.statusItem?.button,
+                      let bw = button.window, window == ObjectIdentifier(bw) else { return false }
+                self.panel?.toggle(below: button)
+                return true
+            }
+            return taken ? nil : event
+        }
     }
 
     @objc private func statusItemClicked() {
@@ -380,10 +436,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// Runs its action once, however many times it is fired.
 @MainActor
 private final class OneShot {
-    private var action: (() -> Void)?
-    init(_ action: @escaping () -> Void) { self.action = action }
-    func fire() {
-        action?()
+    private var action: ((Bool) -> Void)?
+    init(_ action: @escaping (Bool) -> Void) { self.action = action }
+    func fire(_ value: Bool) {
+        action?(value)
         action = nil
     }
 }

@@ -28,6 +28,9 @@ public struct MenuBarView: View {
     @State private var confirmPanic = false
     private let updater = Updater.shared
     @AppStorage(Preferences.quitKey) private var quit = Preferences.Quit.disconnect
+    /// Off: no update is offered here, even one found before — whoever
+    /// turned it off stays on their version without a reminder.
+    @AppStorage(Preferences.checkUpdatesKey) private var checkUpdates = true
 
     public init(model: AppModel, openMain: @escaping () -> Void = {}) {
         self.model = model
@@ -87,7 +90,7 @@ public struct MenuBarView: View {
                     .padding(.vertical, 8)
             }
 
-            if let r = updater.available, model.helper != .notInstalled {
+            if checkUpdates, let r = updater.available, model.helper != .notInstalled {
                 Divider()
                 Button { Task { await updater.install() } } label: {
                     Label("Update to \(r.version)…", systemImage: "arrow.down.circle")

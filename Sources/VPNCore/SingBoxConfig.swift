@@ -412,6 +412,16 @@ public enum SingBoxConfig {
 
     // MARK: - DNS
 
+    /// Reverse zones of addresses that mean something only on the local
+    /// network (RFC 6303, and 100.64.0.0/10 of RFC 6598): private, link-local,
+    /// shared (carrier NAT), unique-local and link-local IPv6.
+    static let privateReverseZones: [String] =
+        ["10.in-addr.arpa"]
+        + (16...31).map { "\($0).172.in-addr.arpa" }
+        + ["168.192.in-addr.arpa", "254.169.in-addr.arpa"]
+        + (64...127).map { "\($0).100.in-addr.arpa" }
+        + ["c.f.ip6.arpa", "d.f.ip6.arpa", "8.e.f.ip6.arpa", "9.e.f.ip6.arpa", "a.e.f.ip6.arpa", "b.e.f.ip6.arpa"]
+
     static func address(_ net: IPNetwork) -> String {
         String(net.description.split(separator: "/")[0])
     }
@@ -423,7 +433,14 @@ public enum SingBoxConfig {
             // the interface in use; follows the Mac to another network.
             ["type": "dhcp", "tag": .string(dnsLocal)],
         ]
-        var dnsRules: [JSON] = []
+        // Names of private addresses (192.168.1.44 → its name) only the
+        // local network can know: never sent out through a tunnel, which
+        // would show the network's addresses to that resolver (RFC 6303).
+        // The router answers them when the local network is reachable;
+        // otherwise they get "no such name" at once.
+        var dnsRules: [JSON] = [profile.lan == .allow
+            ? ["domain_suffix": .strings(privateReverseZones), "action": "route", "server": .string(dnsLocal)]
+            : ["domain_suffix": .strings(privateReverseZones), "action": "predefined", "rcode": "NXDOMAIN"]]
         let zones = profile.dns.localZones.map(Validation.normalizeDomain).filter { !$0.isEmpty }
         if profile.lan == .allow, !zones.isEmpty {
             dnsRules.append(["domain_suffix": .strings(zones), "action": "route", "server": .string(dnsLocal)])

@@ -10,6 +10,8 @@ public struct MainWindow: View {
     @State private var importing = false
     @State private var exporting: ProfileDocument?
     @State private var deleting: Profile?
+    /// Revert asked for: the profile whose changes would be discarded.
+    @State private var reverting: Profile?
     @State private var dropTargeted = false
     @State private var monitor = TrafficMonitor()
     @State private var settingsOpen = false
@@ -88,6 +90,14 @@ public struct MainWindow: View {
         } message: {
             Text("Its exits and rules are deleted too. This cannot be undone — export it to a file first if you may need it.")
         }
+        .confirmationDialog("Discard the changes to “\(reverting?.name ?? "")”?", isPresented: Binding(
+            get: { reverting != nil }, set: { if !$0 { reverting = nil } }), titleVisibility: .visible) {
+            Button("Discard Changes", role: .destructive) {
+                if let p = reverting { model.discardDraft(p.id) }
+            }
+        } message: {
+            Text("The profile goes back to how it was last saved.")
+        }
         // Whole profiles only: a dropped or pasted .srprofile. Links are
         // added in the Add Exit sheet, where it is clear what they become.
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
@@ -122,7 +132,12 @@ public struct MainWindow: View {
         // Live traffic is read only while someone can see it: the Monitor
         // page, in a window that is on screen.
         .background(WindowVisibility { windowVisible = $0 })
-        .onChange(of: selection) { _, _ in updateMonitor() }
+        .onChange(of: selection) { _, _ in
+            updateMonitor()
+            model.shownProfile = selectedProfile
+        }
+        .onAppear { model.shownProfile = selectedProfile }
+        .onDisappear { model.shownProfile = nil }
         .onChange(of: windowVisible) { _, _ in updateMonitor() }
         .onChange(of: model.library.active) { _, p in monitor.setProfile(p) }
     }
@@ -163,7 +178,8 @@ public struct MainWindow: View {
                 // the system's own selection, no card around the rows.
                 ForEach(model.library.profiles) { p in
                     ProfileRow(profile: p, isActive: p.id == model.library.activeID,
-                               status: model.otherUsersVPN ? VPNStatus(phase: .off) : model.status)
+                               status: model.otherUsersVPN ? VPNStatus(phase: .off) : model.status,
+                               edited: model.hasUnsavedChanges(p.id))
                         .tag(Item.profile(p.id))
                         .help(p.id == model.library.activeID ? "Active profile"
                                                              : "Press Return or double-click to make this profile active")
@@ -267,6 +283,36 @@ public struct MainWindow: View {
             .opacity(settingsOpen ? 0.45 : 1)
             .help("Settings (⌘,)")
         }
+        // A profile's Revert and Save, at the trailing end where Apple puts
+        // the key action of a window; only while there is something to
+        // save. Save is prominent (blue), as Apple's guidelines allow for
+        // a window's one key action.
+        if let id = selectedProfile, model.hasUnsavedChanges(id) {
+            ToolbarItem(placement: .automatic) {
+                PushButton(title: "Revert…") { revert(id) }
+                    .help("Discard the unsaved changes" + Self.hint(.revertProfile))
+            }
+            ToolbarItem(placement: .automatic) {
+                PushButton(title: "Save", prominent: true, enabled: !model.busy && !model.saveBlocked(id)) { save(id) }
+                    .help(model.saveBlocked(id) ? "This profile is in use: fix the errors first"
+                                                : "Save the changes" + Self.hint(.saveProfile))
+            }
+        }
+    }
+
+    /// " (⇧⌘S)", or nothing when the shortcut was removed.
+    private static func hint(_ action: ShortcutAction) -> String {
+        action.shortcut.map { " (\($0.symbols))" } ?? ""
+    }
+
+    private func save(_ id: Profile.ID) {
+        guard model.hasUnsavedChanges(id), !model.busy else { return }
+        Task { await model.saveDraft(id) }
+    }
+
+    private func revert(_ id: Profile.ID) {
+        guard model.hasUnsavedChanges(id) else { return }
+        reverting = model.edited(id)
     }
 
     private func newProfile() {
@@ -284,6 +330,10 @@ public struct MainWindow: View {
         case .showLogs: selection = .logs
         case .showActiveProfile:
             if let id = model.library.activeID { selection = .profile(id) }
+        case .saveProfile:
+            if let id = selectedProfile { save(id) }
+        case .revertProfile:
+            if let id = selectedProfile { revert(id) }
         }
     }
 
@@ -324,6 +374,7 @@ struct ProfileRow: View {
     let profile: Profile
     let isActive: Bool
     let status: VPNStatus
+    var edited = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -333,8 +384,12 @@ struct ProfileRow: View {
                                  : isActive ? Color.primary : Color.secondary)
             VStack(alignment: .leading, spacing: 1) {
                 Text(profile.name).lineLimit(1)
-                Text("\(Plural.count(profile.tunnels.count, "server", "servers")) · \(Plural.count(profile.routes.count + 1, "route", "routes"))")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                // Unsaved changes, as a document's title says "Edited". Not
+                // in a colour: on the selected row it would not show.
+                Text(edited ? "Edited" : summary)
+                    .font(.caption.weight(edited ? .semibold : .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer()
             if isActive && status.phase != .off {
@@ -342,6 +397,10 @@ struct ProfileRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private var summary: String {
+        "\(Plural.count(profile.tunnels.count, "server", "servers")) · \(Plural.count(profile.routes.count + 1, "route", "routes"))"
     }
 }
 
@@ -516,7 +575,7 @@ private struct WindowTitle: NSViewRepresentable {
 
 /// Commands from the menu bar that act on the main window.
 public enum WindowCommand: String, Sendable {
-    case newProfile, importProfile, exportProfile, showMonitor, showLogs, showActiveProfile
+    case newProfile, importProfile, exportProfile, showMonitor, showLogs, showActiveProfile, saveProfile, revertProfile
 
     public static let notification = Notification.Name("SilentRouteWindowCommand")
 
@@ -544,5 +603,61 @@ struct CompactLabel: LabelStyle {
             configuration.icon.imageScale(.small)
             configuration.title
         }
+    }
+}
+
+/// A pair of dialog-like buttons for the toolbar: Revert and Save, Save
+/// in the accent colour. On macOS 26 these are SwiftUI's own (Liquid Glass,
+/// prominent). Before it, toolbars draw every SwiftUI button in their own
+/// grey way, with a hover highlight that lags; so they are AppKit push
+/// buttons, as in the Mac's own dialogs, Save tinted with the system's
+/// accent colour exactly as a dialog's default button is.
+struct PushButton: View {
+    let title: String
+    var prominent = false
+    var enabled = true
+    let action: () -> Void
+
+    var body: some View {
+        if #available(macOS 26, *) {
+            if prominent {
+                Button(action: action) { Text(title).padding(.horizontal, 6) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!enabled)
+            } else {
+                Button(title, action: action).disabled(!enabled)
+            }
+        } else {
+            AppKitPushButton(title: title, prominent: prominent, enabled: enabled, action: action)
+                .fixedSize()
+        }
+    }
+}
+
+private struct AppKitPushButton: NSViewRepresentable {
+    let title: String
+    let prominent: Bool
+    let enabled: Bool
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> NSButton {
+        let b = NSButton(title: title, target: context.coordinator, action: #selector(Coordinator.fire))
+        b.bezelStyle = .push
+        return b
+    }
+
+    func updateNSView(_ b: NSButton, context: Context) {
+        context.coordinator.action = action
+        b.title = title
+        b.isEnabled = enabled
+        b.bezelColor = prominent ? .controlAccentColor : nil
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func fire() { action() }
     }
 }

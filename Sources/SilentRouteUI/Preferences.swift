@@ -94,6 +94,18 @@ public enum Preferences {
         UserDefaults.standard.object(forKey: checkUpdatesKey) as? Bool ?? true
     }
 
+    public static let updateIntervalKey = "updateCheckHours"
+    /// How often updates are looked for, in hours. GitHub allows 60 such
+    /// requests an hour per address, shared by everyone behind it (a VPN
+    /// server, an office): no choice comes near that.
+    public static let updateIntervals = [2, 6, 12, 24, 36, 48]
+    public static let defaultUpdateInterval = 6
+
+    @MainActor public static var updateCheckHours: Int {
+        let h = UserDefaults.standard.integer(forKey: updateIntervalKey)
+        return updateIntervals.contains(h) ? h : defaultUpdateInterval
+    }
+
     /// Applies the chosen theme to every window, the menu bar panel included.
     @MainActor public static func applyAppearance(_ a: Appearance = appearance) {
         switch a {

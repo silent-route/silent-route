@@ -2,15 +2,15 @@ import SwiftUI
 import VPNCore
 import VPNRuntime
 
-/// Edits one profile as a draft; nothing reaches the helper until Save.
+/// Edits one profile. Its unsaved changes are a draft the model keeps
+/// (Drafts.swift): leaving the page keeps them, and nothing reaches the
+/// helper until Save.
 struct ProfileEditor: View {
     let model: AppModel
     let saved: Profile
-    @State private var draft: Profile
     /// The page shown: the window's, so that switching to another profile
     /// stays on the same page (DNS stays DNS).
     @Binding var section: Section
-    @State private var saveError: String?
 
     enum Section: String, CaseIterable, Identifiable {
         case routes = "Routes", servers = "Servers", dns = "DNS", network = "Network"
@@ -20,7 +20,6 @@ struct ProfileEditor: View {
     init(model: AppModel, saved: Profile, section: Binding<Section>) {
         self.model = model
         self.saved = saved
-        _draft = State(initialValue: saved)
         _section = section
     }
 
@@ -29,11 +28,19 @@ struct ProfileEditor: View {
         self.init(model: model, saved: saved, section: .constant(section))
     }
 
-    private var dirty: Bool { draft != saved }
+    /// The profile with its unsaved changes; editing it changes the draft.
+    private var draft: Binding<Profile> {
+        let model = self.model
+        let saved = self.saved
+        return Binding(get: { model.drafts[saved.id] ?? saved }, set: { model.edit($0) })
+    }
+    private var current: Profile { draft.wrappedValue }
+    private var dirty: Bool { model.hasUnsavedChanges(saved.id) }
+    private var saveError: String? { model.saveErrors[saved.id] }
 
     /// Server checks through the helper, which reaches servers the way the
     /// VPN does (directly); nil without a helper.
-    private var helperCheck: (@Sendable (Tunnel) async throws -> Probe.Report)? {
+    private var helperCheck: ServerChecks.Check? {
         guard model.helper == .ready else { return nil }
         let model = self.model
         return { t in try await model.probe(t) }
@@ -45,7 +52,7 @@ struct ProfileEditor: View {
         return { urls, update in try await model.ruleLists(urls, update: update) }
     }
     private var isActive: Bool { saved.id == model.library.activeID }
-    private var issues: [Validation.Issue] { Validation.check(draft, listsWithAddresses: listsWithAddresses) }
+    private var issues: [Validation.Issue] { Validation.check(current, listsWithAddresses: listsWithAddresses) }
     /// The profile's lists that hold networks, as the helper has them.
     @State private var listsWithAddresses: Set<String> = []
     /// Live state belongs to the profile that is running.
@@ -59,14 +66,15 @@ struct ProfileEditor: View {
                     if dirty || saveError != nil { changesNotice }
                     Group {
                         switch section {
-                        case .routes: RoutesSection(profile: $draft, liveServers: running ? model.status.servers : [],
+                        case .routes: RoutesSection(profile: draft, liveServers: running ? model.status.servers : [],
                                                     liveRoutes: running ? model.status.routes : [],
                                                     listsWithAddresses: listsWithAddresses)
-                        case .servers: ServersSection(check: helperCheck, profile: $draft, live: running ? model.status.servers : [],
+                        case .servers: ServersSection(checks: model.serverChecks, check: helperCheck, profile: draft,
+                                                      live: running ? model.status.servers : [],
                                                       library: model.helper == .ready ? model.library.servers : nil,
                                                       addToLibrary: model.helper == .ready ? { model.addToLibrary($0) } : nil)
-                        case .dns: DNSSection(dns: $draft.dns)
-                        case .network: NetworkSection(profile: $draft, lists: helperLists)
+                        case .dns: DNSSection(dns: draft.dns)
+                        case .network: NetworkSection(profile: draft, lists: helperLists)
                         }
                     }
                 }
@@ -76,38 +84,17 @@ struct ProfileEditor: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .onChange(of: saved) { old, new in
-            // Changed elsewhere (menu bar, CLI): follow it unless mid-edit.
-            if draft == old { draft = new }
-        }
         // Which lists hold networks (for the routes' notes): as the helper
         // has them; a list not downloaded yet counts once it is.
-        .task(id: draft.lists.map(\.url)) {
+        .task(id: current.lists.map(\.url)) {
             guard let lookup = helperLists else { listsWithAddresses = []; return }
-            let infos = (try? await lookup(draft.lists.map(\.url), false)) ?? []
+            let infos = (try? await lookup(current.lists.map(\.url), false)) ?? []
             listsWithAddresses = Set(infos.filter { $0.hasAddresses == true }.map(\.url))
-        }
-        .background {
-            Button("") { Task { await save() } }.keyboardShortcut("s").hidden().disabled(!dirty || !canSave)
         }
         .toolbar {
             // Switching views of the main area: a segmented control in the
-            // toolbar, centred (Apple's guidelines for macOS).
-            // Save and Revert on the trailing side, Save prominent: Apple's
-            // place for a key action (never a bar at the bottom, which a
-            // window moved down can hide).
-            if dirty {
-                ToolbarItem(placement: .automatic) {
-                    Button("Revert") { draft = saved; saveError = nil }
-                        .help("Discard the unsaved changes")
-                }
-                ToolbarItem(placement: .automatic) {
-                    Button("Save") { Task { await save() } }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.busy || !canSave)
-                        .help(canSave ? "Save the changes (⌘S)" : "This profile is in use: fix the errors first")
-                }
-            }
+            // toolbar, centred (Apple's guidelines for macOS). Save and
+            // Revert are the window's (MainWindow), at its trailing end.
             ToolbarItem(placement: .principal) {
                 Picker("Section", selection: $section) {
                     ForEach(Section.allCases) { s in Text(s.rawValue).tag(s) }
@@ -132,16 +119,17 @@ struct ProfileEditor: View {
                         Text("Active").foregroundStyle(.green)
                         Text("·").foregroundStyle(.tertiary)
                     }
-                    Text("\(Plural.count(draft.tunnels.count, "server", "servers")) · \(Plural.count(draft.routes.count + 1, "route", "routes"))")
+                    Text("\(Plural.count(current.tunnels.count, "server", "servers")) · \(Plural.count(current.routes.count + 1, "route", "routes"))")
                         .foregroundStyle(.secondary)
                 }
                 .font(.callout)
             }
             Spacer(minLength: 12)
             if !isActive {
+                // With unsaved changes, asks to save or discard them first.
                 Button("Make Active") { Task { await model.activate(saved.id) } }
-                    .disabled(model.busy || dirty)
-                    .help(dirty ? "Save your changes first" : "Switch to this profile — right away if the VPN is on")
+                    .disabled(model.busy)
+                    .help("Switch to this profile — right away if the VPN is on")
             }
         }
     }
@@ -156,10 +144,11 @@ struct ProfileEditor: View {
     /// is clear that it is only a stand-in; an emptied field falls back to it.
     private var nameField: some View {
         let placeholder = defaultName
+        let draft = self.draft
         let text = Binding(
-            get: { draft.name == placeholder ? "" : draft.name },
+            get: { draft.wrappedValue.name == placeholder ? "" : draft.wrappedValue.name },
             set: { new in
-                draft.name = new.trimmingCharacters(in: .whitespaces).isEmpty ? placeholder : new
+                draft.wrappedValue.name = new.trimmingCharacters(in: .whitespaces).isEmpty ? placeholder : new
             })
         return TextField("Name", text: text, prompt: Text(placeholder))
             .textFieldStyle(.plain)
@@ -169,35 +158,34 @@ struct ProfileEditor: View {
     }
 
     private var errors: [Validation.Issue] { issues.filter { $0.severity == .error } }
-    /// The running profile must stay valid; others may be saved half-done.
-    private var mustBeValid: Bool { isActive && model.status.phase != .off }
-    private var canSave: Bool { !(mustBeValid && !errors.isEmpty) }
 
     /// What is unsaved and what stops it from saving, at the top where it
     /// is read first.
     private var changesNotice: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if dirty {
+                Label("Unsaved Changes", systemImage: "pencil.circle.fill")
+                    .font(.headline)
+                    .foregroundStyle(.tint)
+                Text(model.saveBlocked(saved.id)
+                     ? "This profile is in use: it can only be saved without errors."
+                     : "Save them with Save at the top right\(ShortcutAction.saveProfile.shortcut.map { " or \($0.symbols)" } ?? ""). They stay while you look at other pages; the VPN uses the profile once it is saved.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let saveError {
                 Label(Text.sentence(saveError), systemImage: "xmark.octagon.fill").foregroundStyle(.red)
             }
             ForEach(errors, id: \.self) { i in
                 Label(Text.sentence(i.message), systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             }
-            if dirty {
-                Text(canSave ? "Unsaved changes — Save is in the toolbar (⌘S)."
-                             : "This profile is in use: it can only be saved without errors.")
-                    .foregroundStyle(.secondary)
-            }
         }
         .font(.callout)
         .textSelection(.enabled)
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(dirty ? AnyShapeStyle(.tint.opacity(0.08)) : AnyShapeStyle(.clear), in: .rect(cornerRadius: 12))
         .contentCard(cornerRadius: 12)
-    }
-
-    private func save() async {
-        saveError = await model.save(draft)
     }
 }
 
@@ -274,6 +262,8 @@ struct DNSSection: View {
         .onChange(of: tunnel) { apply() }
         .onChange(of: suffixes) { apply() }
         .onChange(of: zones) { apply() }
+        // Changed from outside the fields (Revert): show it.
+        .onChange(of: dns) { _, new in if applied(to: new) != new { load() } }
     }
 
     private func load() {
@@ -284,12 +274,19 @@ struct DNSSection: View {
     }
 
     private func apply() {
-        if let d = IPNetwork(direct) { dns.directServer = d }
-        if let t = IPNetwork(tunnel) { dns.tunnelServer = t }
-        let list = suffixes.split(whereSeparator: \.isNewline).map { Validation.normalizeDomain(String($0)) }.filter { !$0.isEmpty }
-        if list != dns.directSuffixes { dns.directSuffixes = list }
-        let local = zones.split(whereSeparator: \.isNewline).map { Validation.normalizeDomain(String($0)) }.filter { !$0.isEmpty }
-        if local != dns.localZones { dns.localZones = local }
+        let d = applied(to: dns)
+        if d != dns { dns = d }
+    }
+
+    /// The settings with what the fields say; a field that is not valid
+    /// yet leaves its setting as it is.
+    private func applied(to base: DNSSettings) -> DNSSettings {
+        var d = base
+        if let s = IPNetwork(direct) { d.directServer = s }
+        if let s = IPNetwork(tunnel) { d.tunnelServer = s }
+        d.directSuffixes = suffixes.split(whereSeparator: \.isNewline).map { Validation.normalizeDomain(String($0)) }.filter { !$0.isEmpty }
+        d.localZones = zones.split(whereSeparator: \.isNewline).map { Validation.normalizeDomain(String($0)) }.filter { !$0.isEmpty }
+        return d
     }
 }
 
@@ -387,6 +384,15 @@ struct MTUPicker: View {
         }
         .onAppear {
             if let m = mtu, !Self.presets.contains(m) { custom = true; text = String(m) }
+        }
+        // Changed from outside (Revert), or by the field: the menu follows.
+        .onChange(of: mtu) { _, m in
+            if let m, !Self.presets.contains(m) {
+                custom = true
+                if Int(text) != m { text = String(m) }
+            } else if !(custom && Int(text) == m) {
+                custom = false
+            }
         }
     }
 }

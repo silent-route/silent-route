@@ -237,7 +237,7 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     let paths: Paths
     let group: UInt32
     let lists: RuleListStore
-    private let probes = Gate(limit: 3)
+    private let probes = Gate(limit: IPC.serverChecksAtOnce, waiting: 32)
 
     init(controller: Controller, profiles: ProfileManager, version: String, sessionLog: SessionLog,
          engine: SingBoxEngine, paths: Paths, group: UInt32, lists: RuleListStore) {
@@ -330,9 +330,10 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 let errors = Validation.check(Profile(name: "check", tunnels: [t])).filter { $0.severity == .error && $0.tunnel == t.id }
                 guard errors.isEmpty else { return await respond(uid, error: errors.map(\.message).joined(separator: "; ")) }
                 // Any user of the Mac may check a server, but each check is
-                // a sing-box run as root: a few at a time, not unbounded.
+                // a sing-box run as root: a few at a time, the next ones in
+                // line, and only so many in line.
                 guard await probes.enter() else {
-                    return await respond(uid, error: "Too many server checks at once — try again in a moment")
+                    return await respond(uid, error: "Too many server checks are waiting — try again in a moment")
                 }
                 let binary: String
                 let report: Probe.Report
@@ -394,15 +395,3 @@ struct Refusal: Error, CustomStringConvertible {
     init(_ d: String) { description = d }
 }
 
-/// At most `limit` at once; the rest are refused rather than queued.
-actor Gate {
-    let limit: Int
-    private var inside = 0
-    init(limit: Int) { self.limit = limit }
-    func enter() -> Bool {
-        guard inside < limit else { return false }
-        inside += 1
-        return true
-    }
-    func leave() { inside = max(0, inside - 1) }
-}

@@ -20,6 +20,10 @@ public enum IPC {
     /// Clients the helper accepts. Each must be signed by the same
     /// certificate as the helper itself.
     public static let clientIdentifiers = ["org.silentroute.app", "org.silentroute.app.cli"]
+
+    /// Server checks the helper runs at once (each is a sing-box); the
+    /// app keeps the rest in its own line, so it never waits in the helper's.
+    public static let serverChecksAtOnce = 4
     public static let helperIdentifier = "org.silentroute.app.helper"
 
     public enum Request: Codable, Sendable {

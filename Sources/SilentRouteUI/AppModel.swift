@@ -27,12 +27,14 @@ public struct XPCBackend: HelperBackend {
     public func send(_ request: IPC.Request) async throws -> IPC.Response {
         // Downloads (Update Now, a profile's new lists before it is saved)
         // take as long as the network does; the helper gives up after two
-        // minutes.
-        let long = switch request {
-        case .updateRuleLists, .saveProfile: true
-        default: false
+        // minutes. A server check takes up to half a minute, and may wait
+        // for one before it (another app's, the command line's).
+        let timeout: TimeInterval = switch request {
+        case .updateRuleLists, .saveProfile: 150
+        case .probe: 90
+        default: 30
         }
-        return try await client.send(request, timeout: long ? 150 : 30)
+        return try await client.send(request, timeout: timeout)
     }
     public var isInstalled: Bool {
         FileManager.default.fileExists(atPath: "/Library/Application Support/Silent Route/bin/SilentRouteHelper")
@@ -75,6 +77,19 @@ public final class AppModel {
     /// says; nil when none is (or the helper does not answer).
     public private(set) var sessionLog: String?
     public private(set) var library = ProfileLibrary()
+    /// Profiles being edited, as they are now: kept until saved or
+    /// discarded, while the user looks at other pages (see Drafts.swift).
+    public internal(set) var drafts: [Profile.ID: Profile] = [:]
+    /// Why a profile's last save failed, until the next try.
+    public internal(set) var saveErrors: [Profile.ID: String] = [:]
+    /// The profile the main window shows, which the menu bar's Save and
+    /// Revert act on.
+    public var shownProfile: Profile.ID?
+    /// Asks what to do with unsaved changes; the app's alert, or a stand-in
+    /// in tests.
+    public var askAboutUnsaved: @MainActor ([Profile], UnsavedReason) -> UnsavedChoice = UnsavedAlert.ask
+    /// Server checks, shared by every list of servers.
+    public let serverChecks = ServerChecks()
     public private(set) var speed: Speed?
     /// Bytes since the uptime's start (`uptimeSince`). sing-box counts from
     /// its own start, so when counting the whole session, what earlier
@@ -198,6 +213,7 @@ public final class AppModel {
         if let lib = r.library {
             library = lib
             libraryRevision = r.libraryRevision
+            pruneDrafts()
         } else if let rev = r.libraryRevision, rev != libraryRevision {
             Task { await self.reloadLibrary() }
         }
@@ -239,6 +255,9 @@ public final class AppModel {
     public var canTurnOff: Bool { helper == .ready || helperOutdated }
 
     public func setOn(_ on: Bool) async {
+        if on, helper == .ready, let id = library.activeID {
+            guard await resolveUnsaved([id], .connect) else { return }
+        }
         notice = nil
         if helper != .ready, helperOutdated {
             guard !on else {
@@ -322,6 +341,8 @@ public final class AppModel {
 
     public func activate(_ id: Profile.ID) async {
         guard id != library.activeID else { return }
+        // The VPN runs a profile as saved: its unsaved changes first.
+        guard await resolveUnsaved([id], .activate) else { return }
         notice = nil
         await run(.activateProfile(id))
     }

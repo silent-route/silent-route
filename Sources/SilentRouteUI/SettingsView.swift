@@ -13,6 +13,7 @@ public struct SettingsView: View {
     @AppStorage(Preferences.appearanceKey) private var appearance = Preferences.Appearance.system
     @AppStorage(Preferences.quitKey) private var quit = Preferences.Quit.disconnect
     @AppStorage(Preferences.checkUpdatesKey) private var checkUpdates = true
+    @AppStorage(Preferences.updateIntervalKey) private var updateHours = Preferences.defaultUpdateInterval
     @AppStorage(Preferences.notificationsKey) private var notifications = Preferences.Notifications.routes
     @AppStorage(Preferences.sessionCounterKey) private var sessionCounter = Preferences.SessionCounter.connection
     @AppStorage(Preferences.logsInBackupsKey) private var logsInBackups = false
@@ -115,6 +116,12 @@ public struct SettingsView: View {
                 Text(sessionCounter == .connection
                      ? "The time, the traffic and Monitor's chart count the current connection."
                      : "The time, the traffic and Monitor's chart count the whole session, across reconnects and profile switches, until you turn the VPN off.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section("Keyboard Shortcuts") {
+                ForEach(ShortcutAction.allCases) { ShortcutRecorder($0) }
+                Text("For the profile shown in the window. Click a shortcut, then type a new one: Esc keeps it as it is, Delete removes it.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -271,6 +278,17 @@ public struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 Toggle("Check for updates automatically", isOn: $checkUpdates)
+                    .onChange(of: checkUpdates) { _, _ in updater.startAutomaticChecks() }
+                Picker("Check every", selection: $updateHours) {
+                    ForEach(Preferences.updateIntervals, id: \.self) { h in Text("\(h) hours").tag(h) }
+                }
+                .disabled(!checkUpdates)
+                .onChange(of: updateHours) { _, _ in updater.startAutomaticChecks() }
+                Text(checkUpdates
+                     ? "A new version is offered in the menu bar."
+                     : "Silent Route does not look for updates by itself and does not offer them in the menu bar. Check Now still looks.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     switch updater.state {
                     case .idle: EmptyView()
