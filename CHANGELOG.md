@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.12-beta
+
+- Over a full-screen app, the menu bar stays while the menu bar panel is open, as it does for the system's menus; the panel closes only on a click elsewhere, Esc, or a click on the icon.
+- The panel sits right under the menu bar, with no gap, and its corners are rounded like the system's menus (Wi-Fi, Now Playing).
+
 ## 1.7.10-beta
 
 Replaces 1.7.5-beta to 1.7.9-beta, which were withdrawn; everything since 1.7.4-beta is here.

@@ -132,6 +132,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Closing the window keeps the app (and its menu bar icon) running.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// The open panel has told the system a menu is open: it says it is
+    /// closed before the app goes.
+    func applicationWillTerminate(_ notification: Notification) {
+        panel?.dismiss()
+    }
+
     /// Clicking the Dock icon brings the window back: the update window
     /// while an update runs (other windows may cover it), else the main one.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
