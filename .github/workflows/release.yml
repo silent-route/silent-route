@@ -1,0 +1,43 @@
+# Pushing a tag such as v1.0.0-beta builds, tests and publishes a release
+# with a ready-to-use disk image. Tags with a suffix (-alpha, -beta) are
+# marked as pre-releases.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Xcode 26 (Liquid Glass needs its SDK)
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)" && swift --version
+      - name: sing-box
+        run: scripts/fetch-sing-box.sh
+      - name: Tests (Apple Silicon)
+        run: scripts/test.sh
+      - name: Build the universal app
+        env:
+          SR_UPDATE_REPOSITORY: ${{ github.repository }}
+        run: SR_VERSION="${GITHUB_REF_NAME#v}" scripts/build-app.sh
+      - name: Disk image
+        run: scripts/package-release.sh
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=()
+          case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; esac
+          # Notes: this version's section of CHANGELOG.md.
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="## $version" '$0 == v {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Silent Route $version" > notes.md
+          gh release create "$GITHUB_REF_NAME" build/release/* "${pre[@]}" \
+            --title "Silent Route $version" --notes-file notes.md

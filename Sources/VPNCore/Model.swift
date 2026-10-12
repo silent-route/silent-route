@@ -1,0 +1,522 @@
+import Foundation
+
+// The data model. This is the only thing that crosses from the app to the
+// root helper, so it is typed all the way down: no free-form config
+// fragments, no raw JSON, no pf text. Anything the helper writes to disk is
+// generated from these types by VPNCore.
+
+// MARK: - Profile
+
+public struct Profile: Codable, Hashable, Sendable, Identifiable {
+    /// 2: routes with server lists and per-route kill switch. Version 1
+    /// (rules, a main tunnel, per-tunnel fallbacks) still loads and is
+    /// converted.
+    public static let currentSchema = 2
+
+    public var schemaVersion: Int
+    public var id: UUID
+    /// What the user calls it ("Home", "Work") — shown in the menu bar.
+    public var name: String
+    /// The servers: tunnels and proxies. Connection details only — where
+    /// traffic goes is decided by the routes.
+    public var tunnels: [Tunnel]
+    /// Checked top to bottom; the first match wins.
+    public var routes: [Route]
+    /// Everything no route claims. Its conditions are ignored.
+    public var defaultRoute: Route
+    public var dns: DNSSettings
+    public var lan: LANPolicy
+    /// Only `.always` still means something (blocking within one boot while
+    /// off); otherwise protection follows the routes' kill switches.
+    public var killSwitch: KillSwitchMode
+
+    public init(schemaVersion: Int = Profile.currentSchema, id: UUID = UUID(), name: String = "Profile",
+                tunnels: [Tunnel] = [], routes: [Route] = [], defaultRoute: Route? = nil,
+                dns: DNSSettings = .default, lan: LANPolicy = .allow, killSwitch: KillSwitchMode = .whileConnected) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.name = name
+        self.tunnels = tunnels
+        self.routes = routes
+        self.defaultRoute = defaultRoute ?? Route.everythingElse(servers: tunnels.first.map { [$0.id] } ?? [])
+        self.dns = dns
+        self.lan = lan
+        self.killSwitch = killSwitch
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, name, tunnels, routes, defaultRoute, dns, lan, killSwitch
+        // schema 1
+        case mainTunnel, rules
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        // Profiles saved before profiles had names lack id and name.
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Profile"
+        tunnels = try c.decode([Tunnel].self, forKey: .tunnels)
+        dns = try c.decode(DNSSettings.self, forKey: .dns)
+        lan = try c.decode(LANPolicy.self, forKey: .lan)
+        killSwitch = try c.decode(KillSwitchMode.self, forKey: .killSwitch)
+        if schemaVersion >= 2 {
+            routes = try c.decode([Route].self, forKey: .routes)
+            defaultRoute = try c.decode(Route.self, forKey: .defaultRoute)
+        } else {
+            // Schema 1: rules → routes; the main tunnel → "Everything else".
+            // A tunnel's fallbacks and kill switch move to every route that
+            // used it; a profile-wide "off" means no route blocks.
+            let legacy = try c.decode([LegacyTunnel].self, forKey: .tunnels)
+            let rules = try c.decodeIfPresent([LegacyRule].self, forKey: .rules) ?? []
+            let main = try c.decodeIfPresent(UUID.self, forKey: .mainTunnel)
+            let globalOff = killSwitch == .off
+            func chain(_ id: UUID) -> [UUID] {
+                var out = [id]
+                for f in legacy.first(where: { $0.id == id })?.fallbacks ?? [] where !out.contains(f) { out.append(f) }
+                return out
+            }
+            func ks(_ id: UUID) -> Bool { !globalOff && (legacy.first { $0.id == id }?.killSwitch ?? true) }
+            func target(_ a: LegacyRule.Action) -> (Route.Target, Bool) {
+                switch a {
+                case .direct: (.direct, true)
+                case .block: (.block, true)
+                case .tunnel(let id): (.servers(chain(id)), ks(id))
+                case .main: main.map { (.servers(chain($0)), ks($0)) } ?? (.direct, true)
+                }
+            }
+            routes = rules.map { r in
+                let (t, k) = target(r.action)
+                return Route(id: r.id, name: r.name, enabled: r.enabled, conditions: r.conditions, target: t, killSwitch: k)
+            }
+            let (t, k) = target(.main)
+            defaultRoute = Route.everythingElse(servers: [])
+            defaultRoute.target = t
+            defaultRoute.killSwitch = k
+            schemaVersion = Profile.currentSchema
+            if killSwitch == .off { killSwitch = .whileConnected }
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(tunnels, forKey: .tunnels)
+        try c.encode(routes, forKey: .routes)
+        try c.encode(defaultRoute, forKey: .defaultRoute)
+        try c.encode(dns, forKey: .dns)
+        try c.encode(lan, forKey: .lan)
+        try c.encode(killSwitch, forKey: .killSwitch)
+    }
+
+    struct LegacyTunnel: Decodable {
+        var id: UUID
+        var fallbacks: [UUID]?
+        var killSwitch: Bool?
+    }
+
+    struct LegacyRule: Decodable {
+        enum Action: Decodable { case main, tunnel(UUID), direct, block }
+        var id: UUID
+        var name: String
+        var enabled: Bool
+        var conditions: Conditions
+        var action: Action
+    }
+
+    /// An example (tests, previews): one country's segment goes direct
+    /// (traffic and DNS), everything else through the servers. New
+    /// profiles start empty (`blank`).
+    public static func example(name: String = "Profile", tunnels: [Tunnel] = []) -> Profile {
+        Profile(name: name, tunnels: tunnels, routes: [
+            Route(name: "Domestic", conditions: Conditions(destinations: domestic), target: .direct),
+        ], dns: .exampleSplit)
+    }
+
+    /// A new profile: no routes, nothing built in. "Everything else" waits
+    /// for the servers the user chooses.
+    public static func blank(name: String) -> Profile {
+        Profile(name: name, defaultRoute: Route(name: "Everything else", target: .servers([])))
+    }
+
+    /// The example's segment: addresses, site lists and domain zones.
+    public static let domestic: [Destination] = [
+        .geoIP("cn"), .geoSite("cn"), .geoSite("geolocation-cn"),
+        .domainSuffix("cn"), .domainSuffix("xn--fiqs8s"),
+    ]
+
+    public func tunnel(_ id: Tunnel.ID) -> Tunnel? { tunnels.first { $0.id == id } }
+
+    /// Every route in evaluation order, the default one last.
+    public var allRoutes: [Route] { routes + [defaultRoute] }
+
+    public func route(_ id: Route.ID) -> Route? { allRoutes.first { $0.id == id } }
+
+    /// The servers a route may use, in order: existing ones only, each once.
+    public func chain(of r: Route) -> [Tunnel.ID] {
+        guard case .servers(let ids) = r.target else { return [] }
+        var out: [Tunnel.ID] = []
+        for id in ids where !out.contains(id) && tunnel(id) != nil { out.append(id) }
+        return out
+    }
+
+    /// Routes that currently send traffic to servers.
+    public var serverRoutes: [Route] {
+        allRoutes.filter { r in
+            guard r.enabled || r.id == defaultRoute.id else { return false }
+            if case .servers = r.target { return true }
+            return false
+        }
+    }
+
+    /// What pf does while sing-box itself is down (starting, restarting):
+    /// block everything that bypasses it if any route in use has its kill
+    /// switch on. While sing-box runs, each route decides for itself.
+    public var protectionMode: KillSwitchMode {
+        if killSwitch == .always { return .always }
+        return serverRoutes.contains { $0.killSwitch } ? .whileConnected : .off
+    }
+}
+
+public enum KillSwitchMode: String, Codable, Hashable, Sendable, CaseIterable {
+    /// No blocking at all.
+    case off
+    /// Blocking only while the VPN is on (and while it is reconnecting).
+    /// After a reboot or a clean stop the network is open.
+    case whileConnected
+    /// Blocking from boot, before login, until the user turns it off.
+    case always
+}
+
+public enum LANPolicy: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Private and link-local ranges go directly (printers, AirDrop, router).
+    case allow
+    /// Private ranges are treated like any other destination.
+    case block
+}
+
+public struct DNSSettings: Codable, Hashable, Sendable {
+    /// Plain UDP resolver used for directly routed domains and for resolving
+    /// the tunnel servers themselves.
+    public var directServer: IPNetwork
+    /// DNS-over-HTTPS resolver reached through the main tunnel.
+    public var tunnelServer: IPNetwork
+    /// Domain suffixes always resolved through `directServer`, in addition to
+    /// the domains of rules that send traffic directly.
+    public var directSuffixes: [String]
+
+    public init(directServer: IPNetwork, tunnelServer: IPNetwork, directSuffixes: [String]) {
+        self.directServer = directServer
+        self.tunnelServer = tunnelServer
+        self.directSuffixes = directSuffixes
+    }
+
+    /// Neutral: nothing country-specific is built in. Names follow the
+    /// routes; everything else is resolved over DoH through the tunnel.
+    public static let `default` = DNSSettings(
+        directServer: IPNetwork("1.1.1.1")!,
+        tunnelServer: IPNetwork("1.1.1.1")!,
+        directSuffixes: [])
+
+    /// The example's split: its zones via a domestic resolver directly,
+    /// everything else via DoH inside the tunnel.
+    public static let exampleSplit = DNSSettings(
+        directServer: IPNetwork("223.5.5.5")!,
+        tunnelServer: IPNetwork("1.1.1.1")!,
+        directSuffixes: ["cn", "xn--fiqs8s"])
+}
+
+// MARK: - Tunnel
+
+public struct Endpoint: Codable, Hashable, Sendable {
+    /// A hostname or an IP literal (IPv6 without brackets).
+    public var host: String
+    public var port: UInt16
+
+    public init(host: String, port: UInt16) {
+        self.host = host
+        self.port = port
+    }
+}
+
+public struct Tunnel: Codable, Hashable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var server: Endpoint
+    public var proto: TunnelProtocol
+    /// Where it came from. A link is kept verbatim so it can be re-parsed
+    /// after the parser learns something new.
+    public var origin: Origin
+
+    public enum Origin: Codable, Hashable, Sendable {
+        case link(String)
+        case manual
+    }
+
+    public init(id: UUID = UUID(), name: String, server: Endpoint, proto: TunnelProtocol, origin: Origin = .manual) {
+        self.id = id
+        self.name = name
+        self.server = server
+        self.proto = proto
+        self.origin = origin
+    }
+}
+
+public enum TunnelProtocol: Codable, Hashable, Sendable {
+    case hysteria2(Hysteria2)
+    case vless(VLESS)
+    case trojan(Trojan)
+    case shadowsocks(Shadowsocks)
+    case vmess(VMess)
+    /// A plain SOCKS5 or HTTP(S) proxy — usable in rules exactly like a tunnel.
+    case proxy(Proxy)
+
+    public var displayName: String {
+        switch self {
+        case .proxy(let p):
+            switch p.kind {
+            case .socks5: "SOCKS5"
+            case .http: p.tls != nil ? "HTTPS proxy" : "HTTP proxy"
+            }
+        case .hysteria2: "Hysteria2"
+        case .vless(let v): v.tls?.reality != nil ? "VLESS Reality" : "VLESS"
+        case .trojan: "Trojan"
+        case .shadowsocks: "Shadowsocks"
+        case .vmess: "VMess"
+        }
+    }
+}
+
+public struct TLS: Codable, Hashable, Sendable {
+    public var serverName: String?
+    public var alpn: [String]
+    public var insecure: Bool
+    /// uTLS client fingerprint ("chrome", "firefox", …); nil = Go's own.
+    public var fingerprint: String?
+    public var reality: Reality?
+
+    public struct Reality: Codable, Hashable, Sendable {
+        public var publicKey: String
+        public var shortID: String
+        public init(publicKey: String, shortID: String) {
+            self.publicKey = publicKey
+            self.shortID = shortID
+        }
+    }
+
+    public init(serverName: String? = nil, alpn: [String] = [], insecure: Bool = false,
+                fingerprint: String? = nil, reality: Reality? = nil) {
+        self.serverName = serverName
+        self.alpn = alpn
+        self.insecure = insecure
+        self.fingerprint = fingerprint
+        self.reality = reality
+    }
+}
+
+/// V2Ray-style transports carried by VLESS, VMess and Trojan.
+public enum Transport: Codable, Hashable, Sendable {
+    case tcp
+    case ws(path: String, host: String?)
+    case grpc(serviceName: String)
+    case httpUpgrade(path: String, host: String?)
+    case http(path: String, host: [String])
+}
+
+public struct Hysteria2: Codable, Hashable, Sendable {
+    public var password: String
+    public var obfsPassword: String?   // salamander, the only obfs type
+    public var tls: TLS
+    /// Port hopping ranges, sing-box syntax "20000:30000".
+    public var serverPorts: [String]
+    public var upMbps: Int?
+    public var downMbps: Int?
+
+    public init(password: String, obfsPassword: String? = nil, tls: TLS, serverPorts: [String] = [],
+                upMbps: Int? = nil, downMbps: Int? = nil) {
+        self.password = password
+        self.obfsPassword = obfsPassword
+        self.tls = tls
+        self.serverPorts = serverPorts
+        self.upMbps = upMbps
+        self.downMbps = downMbps
+    }
+}
+
+public struct VLESS: Codable, Hashable, Sendable {
+    public var uuid: UUID
+    public var flow: String?           // "xtls-rprx-vision"
+    public var tls: TLS?
+    public var transport: Transport
+
+    public init(uuid: UUID, flow: String? = nil, tls: TLS? = nil, transport: Transport = .tcp) {
+        self.uuid = uuid
+        self.flow = flow
+        self.tls = tls
+        self.transport = transport
+    }
+}
+
+public struct Trojan: Codable, Hashable, Sendable {
+    public var password: String
+    public var tls: TLS?
+    public var transport: Transport
+
+    public init(password: String, tls: TLS? = TLS(), transport: Transport = .tcp) {
+        self.password = password
+        self.tls = tls
+        self.transport = transport
+    }
+}
+
+public struct Shadowsocks: Codable, Hashable, Sendable {
+    public var method: String
+    public var password: String
+    /// SIP003 plugin; sing-box supports "obfs-local" and "v2ray-plugin".
+    public var plugin: String?
+    public var pluginOptions: String?
+
+    public init(method: String, password: String, plugin: String? = nil, pluginOptions: String? = nil) {
+        self.method = method
+        self.password = password
+        self.plugin = plugin
+        self.pluginOptions = pluginOptions
+    }
+}
+
+public struct VMess: Codable, Hashable, Sendable {
+    public var uuid: UUID
+    public var security: String        // "auto", "aes-128-gcm", …
+    public var alterID: Int
+    public var tls: TLS?
+    public var transport: Transport
+
+    public init(uuid: UUID, security: String = "auto", alterID: Int = 0, tls: TLS? = nil, transport: Transport = .tcp) {
+        self.uuid = uuid
+        self.security = security
+        self.alterID = alterID
+        self.tls = tls
+        self.transport = transport
+    }
+}
+
+/// SOCKS5 or HTTP CONNECT proxy. Not a tunnel: the traffic to it is not
+/// encrypted unless the proxy itself speaks TLS (HTTPS proxy), and HTTP
+/// proxies carry TCP only.
+public struct Proxy: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, Hashable, Sendable, CaseIterable {
+        case socks5
+        case http
+    }
+
+    public var kind: Kind
+    public var username: String?
+    public var password: String?
+    /// HTTPS proxy (TLS to the proxy). SOCKS5 has no TLS.
+    public var tls: TLS?
+
+    public init(kind: Kind, username: String? = nil, password: String? = nil, tls: TLS? = nil) {
+        self.kind = kind
+        self.username = username
+        self.password = password
+        self.tls = tls
+    }
+}
+
+// MARK: - Rules
+
+/// A route: a named group of traffic and where it goes.
+///
+/// What it matches, deliberately simple: a connection matches when it
+/// matches **any** destination AND **any** app AND **any** port AND the
+/// protocol — each empty group is "anything". The generator writes this as
+/// explicit logical rules, because sing-box's own grouping inside a single
+/// rule is not the same.
+///
+/// Where it goes: directly, blocked, or through a list of servers (tunnels
+/// and proxies, mixed) — the first that answers carries the traffic. When
+/// none answers, the kill switch blocks the traffic, or it goes direct.
+public struct Route: Codable, Hashable, Identifiable, Sendable {
+    public enum Target: Codable, Hashable, Sendable {
+        case direct
+        case block
+        /// In order of preference; the first is the route's own server.
+        case servers([Tunnel.ID])
+    }
+
+    public var id: UUID
+    public var name: String
+    public var enabled: Bool
+    public var conditions: Conditions
+    public var target: Target
+    public var killSwitch: Bool
+
+    public init(id: UUID = UUID(), name: String, enabled: Bool = true, conditions: Conditions = Conditions(),
+                target: Target, killSwitch: Bool = true) {
+        self.id = id
+        self.name = name
+        self.enabled = enabled
+        self.conditions = conditions
+        self.target = target
+        self.killSwitch = killSwitch
+    }
+
+    public static func everythingElse(servers: [Tunnel.ID]) -> Route {
+        Route(name: "Everything else", target: servers.isEmpty ? .direct : .servers(servers))
+    }
+
+    public var servers: [Tunnel.ID] { if case .servers(let s) = target { s } else { [] } }
+}
+
+public struct Conditions: Codable, Hashable, Sendable {
+    public var destinations: [Destination]
+    public var apps: [AppMatcher]
+    public var ports: [PortRange]
+    public var network: Network?
+
+    public init(destinations: [Destination] = [], apps: [AppMatcher] = [], ports: [PortRange] = [], network: Network? = nil) {
+        self.destinations = destinations
+        self.apps = apps
+        self.ports = ports
+        self.network = network
+    }
+
+    public var isEmpty: Bool { destinations.isEmpty && apps.isEmpty && ports.isEmpty && network == nil }
+}
+
+public enum Destination: Codable, Hashable, Sendable {
+    case cidr(IPNetwork)
+    /// The domain and all its subdomains.
+    case domainSuffix(String)
+    /// Exactly this name.
+    case domain(String)
+    case domainKeyword(String)
+    /// ISO 3166 country code, lowercase ("cn"). Needs a geoip rule-set.
+    case geoIP(String)
+    /// A named domain list ("geolocation-cn"). Needs a geosite rule-set.
+    case geoSite(String)
+}
+
+public enum AppMatcher: Codable, Hashable, Sendable {
+    /// Everything inside an app bundle — the main binary and all helper
+    /// processes (browsers and Electron apps run their traffic from helpers).
+    case bundle(path: String)
+    /// One executable, by absolute path.
+    case executable(path: String)
+    /// Any process with this executable name.
+    case processName(String)
+}
+
+public struct PortRange: Codable, Hashable, Sendable {
+    public var lower: UInt16
+    public var upper: UInt16
+
+    public init(_ port: UInt16) { lower = port; upper = port }
+    public init(_ lower: UInt16, _ upper: UInt16) { self.lower = lower; self.upper = upper }
+}
+
+public enum Network: String, Codable, Hashable, Sendable {
+    case tcp, udp
+}

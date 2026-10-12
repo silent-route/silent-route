@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="621" height="176" viewBox="0 0 621 176">
+  <style>text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 14px; fill: #8957e5; white-space: pre; }</style>
+  <text x="14" y="28">┌──────────────┐   XPC (typed requests,   ┌─────────────────────────┐</text>
+  <text x="14" y="47">│ Silent Route │   peer signature check)  │ helper (launchd, root)  │</text>
+  <text x="14" y="66">│ app          │ ───────────────────────▶ │  profile storage        │</text>
+  <text x="14" y="85">│              │ ◀──────── status ─────── │  sing-box config, pf    │</text>
+  <text x="14" y="104">└──────────────┘                          │  health checks          │</text>
+  <text x="14" y="123">                                          └────────────┬────────────┘</text>
+  <text x="14" y="142">                                                       │ spawns</text>
+  <text x="14" y="161">                                        sing-box (TUN) ──▶ network</text>
+</svg>

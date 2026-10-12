@@ -1,0 +1,451 @@
+import Foundation
+
+/// Generates the sing-box configuration from a profile.
+///
+/// Pure function: everything that depends on the machine (paths, the clash
+/// API port and secret) comes in through `Environment`, chosen by the helper.
+/// Nothing in the profile can name a file.
+public enum SingBoxConfig {
+    public struct Environment: Sendable {
+        /// Directory for rule-sets kept on disk (`geoip-<cc>.srs`,
+        /// `geosite-<name>.srs`). Absolute.
+        public var ruleSetDirectory: String
+        /// sing-box cache file. Absolute.
+        public var cacheFile: String
+        public var clashAPIPort: UInt16
+        /// Fresh random secret for every start; handed to the app over XPC.
+        public var clashAPISecret: String
+        /// Countries with a `geoip-<cc>.srs` file on disk. Any other country
+        /// is downloaded by sing-box when first used, and cached.
+        public var geoIPCountries: Set<String>
+        /// Site lists with a `geosite-<name>.srs` file on disk; the same.
+        public var siteLists: Set<String>
+        public var logLevel: String
+
+        public init(ruleSetDirectory: String, cacheFile: String, clashAPIPort: UInt16, clashAPISecret: String,
+                    geoIPCountries: Set<String>, siteLists: Set<String> = [], logLevel: String = "warn") {
+            self.ruleSetDirectory = ruleSetDirectory
+            self.cacheFile = cacheFile
+            self.clashAPIPort = clashAPIPort
+            self.clashAPISecret = clashAPISecret
+            self.geoIPCountries = geoIPCountries
+            self.siteLists = siteLists
+            self.logLevel = logLevel
+        }
+    }
+
+    public enum Failure: Error, Equatable, Sendable, CustomStringConvertible {
+        case invalidProfile([String])
+        case noTunnels
+        case badEnvironment(String)
+
+        public var description: String {
+            switch self {
+            case .invalidProfile(let e): "The profile has errors: " + e.joined(separator: "; ")
+            case .noTunnels: "The profile has no tunnels"
+            case .badEnvironment(let s): "Internal error: \(s)"
+            }
+        }
+    }
+
+    // Fixed tags. Tunnel tags are "t-<uuid>", which no user text can produce.
+    static let directTag = "direct"
+    static let dnsDirect = "dns-direct"
+    static let tunTag = "tun-in"
+
+    /// The outbound tag of a tunnel itself: the clash API checks it.
+    public static func tag(_ id: UUID) -> String { "t-" + id.uuidString.lowercased() }
+    /// A route's selector: its servers in order and, without kill switch,
+    /// direct. The helper points it at the first member that answers.
+    public static func routeTag(_ id: UUID) -> String { "r-" + id.uuidString.lowercased() }
+    public static let direct = "direct"
+    static func dnsTag(_ id: UUID) -> String { "dns-r-" + id.uuidString.lowercased() }
+
+    /// The address of the TUN interface; the helper finds the interface by
+    /// it. Deliberately not sing-box's usual 172.19.0.1, so
+    /// another sing-box-based VPN is never mistaken for ours.
+    public static let tunAddress4 = "172.19.0.5/30"
+    public static let tunAddress6 = "fdfe:dcba:9876::5/126"
+
+    // MARK: - Full config
+
+    public static func generate(_ profile: Profile, env: Environment) throws(Failure) -> JSON {
+        guard env.ruleSetDirectory.hasPrefix("/"), env.cacheFile.hasPrefix("/") else {
+            throw .badEnvironment("paths must be absolute")
+        }
+        let errors = Validation.check(profile)
+            .filter { $0.severity == .error }
+        guard errors.isEmpty else { throw .invalidProfile(errors.map(\.message)) }
+        let routes = profile.routes.filter(\.enabled)
+        let def = profile.defaultRoute
+
+        // Outbounds: every server; per route that uses servers a selector
+        // over them; direct.
+        var outbounds: [JSON] = profile.tunnels.map { outbound($0, tag: tag($0.id)) }
+        for r in profile.serverRoutes {
+            var members = profile.chain(of: r).map(tag)
+            if !r.killSwitch { members.append(directTag) }
+            outbounds.append([
+                "type": "selector", "tag": .string(routeTag(r.id)),
+                "outbounds": .strings(members),
+                "default": .string(members[0]),
+                // Moving to the next server must move existing connections
+                // too, or long-lived sessions would hang on the dead one.
+                "interrupt_exist_connections": true,
+            ])
+        }
+        outbounds.append(["type": "direct", "tag": .string(directTag)])
+
+        // Route rules.
+        var routeRules: [JSON] = [
+            ["action": "sniff"],
+            ["protocol": "dns", "action": "hijack-dns"],
+        ]
+        if profile.lan == .allow {
+            routeRules.append(["ip_is_private": true, "action": "route", "outbound": .string(directTag)])
+        }
+        for r in routes {
+            routeRules.append(routeRule(r))
+        }
+        var final = directTag
+        switch def.target {
+        case .servers: final = routeTag(def.id)
+        case .direct: break
+        // A rule needs a condition: everything enters through the TUN.
+        case .block: routeRules.append(["inbound": [.string(tunTag)], "action": "reject"])
+        }
+
+        // Rule-sets actually referenced.
+        var ruleSetTags: [String] = []
+        for r in routes {
+            for d in r.conditions.destinations {
+                let t: String? = switch d {
+                case .geoIP(let cc): "geoip-\(cc)"
+                case .geoSite(let n): "geosite-\(n)"
+                default: nil
+                }
+                if let t, !ruleSetTags.contains(t) { ruleSetTags.append(t) }
+            }
+        }
+        let dir = env.ruleSetDirectory.hasSuffix("/") ? String(env.ruleSetDirectory.dropLast()) : env.ruleSetDirectory
+        let ruleSets: [JSON] = ruleSetTags.map { tag in
+            let onDisk = tag.hasPrefix("geoip-") ? env.geoIPCountries.contains(String(tag.dropFirst(6)))
+                                                 : env.siteLists.contains(String(tag.dropFirst(8)))
+            if onDisk {
+                return ["type": "local", "tag": .string(tag), "format": "binary", "path": .string("\(dir)/\(tag).srs")]
+            }
+            return ["type": "remote", "tag": .string(tag), "format": "binary", "url": .string(ruleSetURL(tag)),
+                    "download_detour": .string(direct), "update_interval": "7d"]
+        }
+
+        var route: [String: JSON] = [
+            "rules": .array(routeRules),
+            "final": .string(final),
+            "auto_detect_interface": true,
+            "default_domain_resolver": .string(dnsDirect),
+            "find_process": true,
+        ]
+        if !ruleSets.isEmpty { route["rule_set"] = .array(ruleSets) }
+
+        return [
+            "log": ["level": .string(env.logLevel), "timestamp": true],
+            "dns": dns(profile, routes: routes, env: env),
+            "inbounds": [[
+                "type": "tun", "tag": .string(tunTag),
+                "address": [.string(tunAddress4), .string(tunAddress6)],
+                "mtu": 9000,
+                "auto_route": true,
+                "stack": "gvisor",
+            ]],
+            "outbounds": .array(outbounds),
+            "route": .object(route),
+            "experimental": [
+                "cache_file": ["enabled": true, "path": .string(env.cacheFile)],
+                "clash_api": [
+                    "external_controller": .string("127.0.0.1:\(env.clashAPIPort)"),
+                    "secret": .string(env.clashAPISecret),
+                ],
+            ],
+        ]
+    }
+
+    // MARK: - Server check config
+
+    /// A config that only exposes one tunnel as a local SOCKS proxy: no TUN,
+    /// no routes, no clash API, no cache file. Used to test a server while
+    /// the real connection (or none) stays untouched.
+    /// The public rule-sets the sing-box project publishes. Downloaded by
+    /// each user's own sing-box, so Silent Route itself ships no address
+    /// or site data.
+    static func ruleSetURL(_ tag: String) -> String {
+        tag.hasPrefix("geoip-")
+            ? "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/\(tag).srs"
+            : "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/\(tag).srs"
+    }
+
+    public static func probe(_ tunnel: Tunnel, socksPort: UInt16, dns: DNSSettings = .default) -> JSON {
+        [
+            "log": ["level": "warn"],
+            "dns": [
+                "servers": [["type": "udp", "tag": .string(dnsDirect), "server": .string(address(dns.directServer))]],
+                "final": .string(dnsDirect),
+                "strategy": "ipv4_only",
+            ],
+            "inbounds": [["type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": .int(Int(socksPort))]],
+            "outbounds": [outbound(tunnel, tag: "probe"), ["type": "direct", "tag": .string(directTag)]],
+            "route": ["final": "probe", "default_domain_resolver": .string(dnsDirect)],
+        ]
+    }
+
+    // MARK: - DNS
+
+    static func address(_ net: IPNetwork) -> String {
+        String(net.description.split(separator: "/")[0])
+    }
+
+    static func dns(_ profile: Profile, routes: [Route], env: Environment) -> JSON {
+        var servers: [JSON] = [
+            ["type": "udp", "tag": .string(dnsDirect), "server": .string(address(profile.dns.directServer))],
+        ]
+        var dnsRules: [JSON] = []
+        // DoH through a route's own selector, so a name is looked up through
+        // the same server its traffic will take (and fails over with it).
+        func viaRoute(_ r: Route) -> String {
+            let t = dnsTag(r.id)
+            if !servers.contains(where: { $0["tag"] == .string(t) }) {
+                servers.append(["type": "https", "tag": .string(t),
+                                "server": .string(address(profile.dns.tunnelServer)), "detour": .string(routeTag(r.id))])
+            }
+            return t
+        }
+
+        // Only routes whose condition is purely about the domain can be
+        // mirrored: a DNS query does not carry the app or port of the
+        // connection that will follow (it comes from mDNSResponder).
+        for r in routes where r.conditions.apps.isEmpty && r.conditions.ports.isEmpty && r.conditions.network == nil {
+            var domains = domainFields(r.conditions.destinations)
+            let sites = r.conditions.destinations.compactMap { if case .geoSite(let n) = $0 { "geosite-\(n)" } else { nil } }
+            if !sites.isEmpty { domains["rule_set"] = .strings(sites) }
+            guard !domains.isEmpty else { continue }
+            var rule = domains
+            switch r.target {
+            case .direct: rule["server"] = .string(dnsDirect)
+            case .servers: rule["server"] = .string(viaRoute(r))
+            case .block: rule["action"] = "reject"
+            }
+            if rule["action"] == nil { rule["action"] = "route" }
+            dnsRules.append(.object(rule))
+        }
+
+        // Nothing country-specific is built in: site lists are resolved
+        // directly only when a route sends them direct (above).
+        let suffixes = profile.dns.directSuffixes.map(Validation.normalizeDomain)
+        if !suffixes.isEmpty {
+            dnsRules.append(["domain_suffix": .strings(suffixes), "action": "route", "server": .string(dnsDirect)])
+        }
+
+        // Everything else is resolved the way the default route goes.
+        let def = profile.defaultRoute
+        let final: String
+        if case .servers = def.target { final = viaRoute(def) } else { final = dnsDirect }
+        return [
+            "servers": .array(servers),
+            "rules": .array(dnsRules),
+            "final": .string(final),
+            "strategy": "ipv4_only",
+            "independent_cache": true,
+        ]
+    }
+
+    /// Only the domain-name parts of a destination list, as one default rule
+    /// (sing-box ORs domain, domain_suffix and domain_keyword together).
+    static func domainFields(_ ds: [Destination]) -> [String: JSON] {
+        var exact: [String] = [], suffix: [String] = [], keyword: [String] = []
+        for d in ds {
+            switch d {
+            case .domain(let s): exact.append(Validation.normalizeDomain(s))
+            case .domainSuffix(let s): suffix.append(Validation.normalizeDomain(s))
+            case .domainKeyword(let s): keyword.append(s.lowercased())
+            case .cidr, .geoIP, .geoSite: break
+            }
+        }
+        var out: [String: JSON] = [:]
+        if !exact.isEmpty { out["domain"] = .strings(exact) }
+        if !suffix.isEmpty { out["domain_suffix"] = .strings(suffix) }
+        if !keyword.isEmpty { out["domain_keyword"] = .strings(keyword) }
+        return out
+    }
+
+    // MARK: - Route rules
+
+    /// One profile rule as one sing-box rule. Each condition group becomes a
+    /// separate sub-rule; groups are AND-ed with an explicit logical rule, and
+    /// several kinds of destination inside a group are OR-ed with another, so
+    /// the meaning never depends on sing-box's implicit field grouping.
+    static func routeRule(_ r: Route) -> JSON {
+        var parts: [[String: JSON]] = []
+        let c = r.conditions
+
+        if !c.destinations.isEmpty {
+            var kinds: [[String: JSON]] = []
+            let cidrs = c.destinations.compactMap { if case .cidr(let n) = $0 { n.description } else { nil } }
+            if !cidrs.isEmpty { kinds.append(["ip_cidr": .strings(cidrs)]) }
+            let geo = c.destinations.compactMap { d -> String? in
+                switch d {
+                case .geoIP(let cc): "geoip-\(cc)"
+                case .geoSite(let n): "geosite-\(n)"
+                default: nil
+                }
+            }
+            if !geo.isEmpty { kinds.append(["rule_set": .strings(geo)]) }
+            for (k, v) in domainFields(c.destinations).sorted(by: { $0.key < $1.key }) { kinds.append([k: v]) }
+            parts.append(kinds.count == 1 ? kinds[0] : ["type": "logical", "mode": "or", "rules": .array(kinds.map(JSON.object))])
+        }
+        if !c.apps.isEmpty {
+            // One field for every kind of app matcher: sing-box AND-s
+            // process_name with process_path, which is not what a list of
+            // apps means.
+            parts.append(["process_path_regex": .strings(c.apps.map(appRegex))])
+        }
+        if !c.ports.isEmpty {
+            parts.append(["port_range": .strings(c.ports.map { "\($0.lower):\($0.upper)" })])
+        }
+        if let n = c.network {
+            parts.append(["network": .strings([n.rawValue])])
+        }
+
+        var rule: [String: JSON] = parts.count == 1
+            ? parts[0]
+            : ["type": "logical", "mode": "and", "rules": .array(parts.map(JSON.object))]
+        switch r.target {
+        case .servers: rule["action"] = "route"; rule["outbound"] = .string(routeTag(r.id))
+        case .direct: rule["action"] = "route"; rule["outbound"] = .string(directTag)
+        case .block: rule["action"] = "reject"
+        }
+        return .object(rule)
+    }
+
+    static func appRegex(_ a: AppMatcher) -> String {
+        switch a {
+        case .bundle(let path):
+            var p = path
+            while p.hasSuffix("/") { p.removeLast() }
+            return "^" + regexEscape(p) + "/"
+        case .executable(let path): return "^" + regexEscape(path) + "$"
+        case .processName(let name): return "/" + regexEscape(name) + "$"
+        }
+    }
+
+    static func regexEscape(_ s: String) -> String {
+        var out = ""
+        for ch in s {
+            if "\\^$.|?*+()[]{}".contains(ch) { out.append("\\") }
+            out.append(ch)
+        }
+        return out
+    }
+
+    // MARK: - Outbounds
+
+    static func outbound(_ t: Tunnel, tag: String) -> JSON {
+        var o: [String: JSON] = [
+            "tag": .string(tag),
+            "server": .string(t.server.host),
+            "server_port": .int(Int(t.server.port)),
+        ]
+        if IPNetwork.parseV4(t.server.host) == nil, IPNetwork.parseV6(t.server.host) == nil {
+            // Tunnel servers are always resolved outside every tunnel.
+            o["domain_resolver"] = .string(dnsDirect)
+        }
+        switch t.proto {
+        case .hysteria2(let h):
+            o["type"] = "hysteria2"
+            o["password"] = .string(h.password)
+            if let op = h.obfsPassword { o["obfs"] = ["type": "salamander", "password": .string(op)] }
+            if !h.serverPorts.isEmpty { o["server_ports"] = .strings(h.serverPorts) }
+            if let u = h.upMbps { o["up_mbps"] = .int(u) }
+            if let d = h.downMbps { o["down_mbps"] = .int(d) }
+            o["tls"] = tls(h.tls)
+        case .vless(let v):
+            o["type"] = "vless"
+            o["uuid"] = .string(v.uuid.uuidString.lowercased())
+            if let f = v.flow { o["flow"] = .string(f) }
+            if let t = v.tls { o["tls"] = tls(t) }
+            if let tr = transport(v.transport) { o["transport"] = tr }
+        case .trojan(let tr):
+            o["type"] = "trojan"
+            o["password"] = .string(tr.password)
+            if let t = tr.tls { o["tls"] = tls(t) }
+            if let x = transport(tr.transport) { o["transport"] = x }
+        case .shadowsocks(let s):
+            o["type"] = "shadowsocks"
+            o["method"] = .string(s.method)
+            o["password"] = .string(s.password)
+            if let p = s.plugin {
+                o["plugin"] = .string(p)
+                if let opts = s.pluginOptions { o["plugin_opts"] = .string(opts) }
+            }
+        case .proxy(let p):
+            switch p.kind {
+            case .socks5:
+                o["type"] = "socks"
+                o["version"] = "5"
+            case .http:
+                o["type"] = "http"
+                if let t = p.tls { o["tls"] = tls(t) }
+            }
+            if let u = p.username { o["username"] = .string(u) }
+            if let pw = p.password { o["password"] = .string(pw) }
+        case .vmess(let v):
+            o["type"] = "vmess"
+            o["uuid"] = .string(v.uuid.uuidString.lowercased())
+            o["security"] = .string(v.security)
+            o["alter_id"] = .int(v.alterID)
+            if let t = v.tls { o["tls"] = tls(t) }
+            if let x = transport(v.transport) { o["transport"] = x }
+        }
+        return .object(o)
+    }
+
+    static func tls(_ t: TLS) -> JSON {
+        var o: [String: JSON] = ["enabled": true]
+        if let sni = t.serverName { o["server_name"] = .string(sni) }
+        if !t.alpn.isEmpty { o["alpn"] = .strings(t.alpn) }
+        if t.insecure { o["insecure"] = true }
+        if let fp = t.fingerprint { o["utls"] = ["enabled": true, "fingerprint": .string(fp)] }
+        if let r = t.reality {
+            o["reality"] = ["enabled": true, "public_key": .string(r.publicKey), "short_id": .string(r.shortID)]
+        }
+        return .object(o)
+    }
+
+    static func transport(_ t: Transport) -> JSON? {
+        switch t {
+        case .tcp:
+            return nil
+        case .ws(let path, let host):
+            var o: [String: JSON] = ["type": "ws"]
+            // Xray puts WebSocket early data in the path ("/ws?ed=2048");
+            // sing-box wants it as separate options.
+            var p = path
+            if let q = path.range(of: "?ed="), let n = Int(path[q.upperBound...]) {
+                p = String(path[..<q.lowerBound])
+                o["max_early_data"] = .int(n)
+                o["early_data_header_name"] = "Sec-WebSocket-Protocol"
+            }
+            o["path"] = .string(p)
+            if let h = host { o["headers"] = ["Host": .string(h)] }
+            return .object(o)
+        case .grpc(let name):
+            return ["type": "grpc", "service_name": .string(name)]
+        case .httpUpgrade(let path, let host):
+            var o: [String: JSON] = ["type": "httpupgrade", "path": .string(path)]
+            if let h = host { o["host"] = .string(h) }
+            return .object(o)
+        case .http(let path, let hosts):
+            var o: [String: JSON] = ["type": "http", "path": .string(path)]
+            if !hosts.isEmpty { o["host"] = .strings(hosts) }
+            return .object(o)
+        }
+    }
+}

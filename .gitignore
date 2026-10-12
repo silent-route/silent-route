@@ -1,0 +1,21 @@
+# Build output
+.build/
+build/
+*.app
+*.dSYM
+
+# sing-box binaries are downloaded and verified by scripts/fetch-sing-box.sh
+Resources/sing-box/
+
+# Local signing identity (private key) — never commit
+.signing/
+
+# Profiles, links and anything else that may carry passwords or server addresses
+*.profile.json
+profile*.json
+links.txt
+
+# Raw experiment output may contain local addresses; conclusions go to docs/
+experiments/**/results.txt
+
+.DS_Store

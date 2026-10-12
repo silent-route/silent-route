@@ -1,0 +1,274 @@
+{
+  "dns" : {
+    "final" : "dns-r-00000000-0000-0000-0000-0000000000d0",
+    "independent_cache" : true,
+    "rules" : [
+      {
+        "action" : "route",
+        "domain_suffix" : [
+          "cn",
+          "xn--fiqs8s"
+        ],
+        "rule_set" : [
+          "geosite-cn",
+          "geosite-geolocation-cn"
+        ],
+        "server" : "dns-direct"
+      },
+      {
+        "action" : "route",
+        "domain_suffix" : [
+          "corp.example"
+        ],
+        "server" : "dns-direct"
+      },
+      {
+        "action" : "reject",
+        "domain_keyword" : [
+          "adserver"
+        ]
+      },
+      {
+        "action" : "route",
+        "domain_suffix" : [
+          "cn",
+          "xn--fiqs8s"
+        ],
+        "server" : "dns-direct"
+      }
+    ],
+    "servers" : [
+      {
+        "server" : "223.5.5.5",
+        "tag" : "dns-direct",
+        "type" : "udp"
+      },
+      {
+        "detour" : "r-00000000-0000-0000-0000-0000000000d0",
+        "server" : "1.1.1.1",
+        "tag" : "dns-r-00000000-0000-0000-0000-0000000000d0",
+        "type" : "https"
+      }
+    ],
+    "strategy" : "ipv4_only"
+  },
+  "experimental" : {
+    "cache_file" : {
+      "enabled" : true,
+      "path" : "/Library/Application Support/Silent Route/run/cache.db"
+    },
+    "clash_api" : {
+      "external_controller" : "127.0.0.1:19090",
+      "secret" : "SECRET"
+    }
+  },
+  "inbounds" : [
+    {
+      "address" : [
+        "172.19.0.5/30",
+        "fdfe:dcba:9876::5/126"
+      ],
+      "auto_route" : true,
+      "mtu" : 9000,
+      "stack" : "gvisor",
+      "tag" : "tun-in",
+      "type" : "tun"
+    }
+  ],
+  "log" : {
+    "level" : "warn",
+    "timestamp" : true
+  },
+  "outbounds" : [
+    {
+      "domain_resolver" : "dns-direct",
+      "obfs" : {
+        "password" : "obfs",
+        "type" : "salamander"
+      },
+      "password" : "pw",
+      "server" : "vpn.example.org",
+      "server_port" : 443,
+      "tag" : "t-00000000-0000-0000-0000-0000000000a1",
+      "tls" : {
+        "alpn" : [
+          "h3"
+        ],
+        "enabled" : true,
+        "server_name" : "vpn.example.org"
+      },
+      "type" : "hysteria2"
+    },
+    {
+      "flow" : "xtls-rprx-vision",
+      "server" : "203.0.113.10",
+      "server_port" : 443,
+      "tag" : "t-00000000-0000-0000-0000-0000000000b2",
+      "tls" : {
+        "enabled" : true,
+        "reality" : {
+          "enabled" : true,
+          "public_key" : "ZcUXAS9Ch2aP6IAJBcrLFmdPtjQxAm1sWaA2hvpWtXc",
+          "short_id" : "ab12"
+        },
+        "server_name" : "www.example.com",
+        "utls" : {
+          "enabled" : true,
+          "fingerprint" : "chrome"
+        }
+      },
+      "type" : "vless",
+      "uuid" : "11111111-2222-3333-4444-555555555555"
+    },
+    {
+      "default" : "t-00000000-0000-0000-0000-0000000000b2",
+      "interrupt_exist_connections" : true,
+      "outbounds" : [
+        "t-00000000-0000-0000-0000-0000000000b2"
+      ],
+      "tag" : "r-00000000-0000-0000-0000-0000000000c1",
+      "type" : "selector"
+    },
+    {
+      "default" : "t-00000000-0000-0000-0000-0000000000a1",
+      "interrupt_exist_connections" : true,
+      "outbounds" : [
+        "t-00000000-0000-0000-0000-0000000000a1",
+        "direct"
+      ],
+      "tag" : "r-00000000-0000-0000-0000-0000000000c3",
+      "type" : "selector"
+    },
+    {
+      "default" : "t-00000000-0000-0000-0000-0000000000a1",
+      "interrupt_exist_connections" : true,
+      "outbounds" : [
+        "t-00000000-0000-0000-0000-0000000000a1",
+        "t-00000000-0000-0000-0000-0000000000b2"
+      ],
+      "tag" : "r-00000000-0000-0000-0000-0000000000d0",
+      "type" : "selector"
+    },
+    {
+      "tag" : "direct",
+      "type" : "direct"
+    }
+  ],
+  "route" : {
+    "auto_detect_interface" : true,
+    "default_domain_resolver" : "dns-direct",
+    "final" : "r-00000000-0000-0000-0000-0000000000d0",
+    "find_process" : true,
+    "rule_set" : [
+      {
+        "format" : "binary",
+        "path" : "/Library/Application Support/Silent Route/rules/geoip-cn.srs",
+        "tag" : "geoip-cn",
+        "type" : "local"
+      },
+      {
+        "format" : "binary",
+        "path" : "/Library/Application Support/Silent Route/rules/geosite-cn.srs",
+        "tag" : "geosite-cn",
+        "type" : "local"
+      },
+      {
+        "format" : "binary",
+        "path" : "/Library/Application Support/Silent Route/rules/geosite-geolocation-cn.srs",
+        "tag" : "geosite-geolocation-cn",
+        "type" : "local"
+      }
+    ],
+    "rules" : [
+      {
+        "action" : "sniff"
+      },
+      {
+        "action" : "hijack-dns",
+        "protocol" : "dns"
+      },
+      {
+        "action" : "route",
+        "ip_is_private" : true,
+        "outbound" : "direct"
+      },
+      {
+        "action" : "route",
+        "mode" : "or",
+        "outbound" : "direct",
+        "rules" : [
+          {
+            "rule_set" : [
+              "geoip-cn",
+              "geosite-cn",
+              "geosite-geolocation-cn"
+            ]
+          },
+          {
+            "domain_suffix" : [
+              "cn",
+              "xn--fiqs8s"
+            ]
+          }
+        ],
+        "type" : "logical"
+      },
+      {
+        "action" : "route",
+        "outbound" : "r-00000000-0000-0000-0000-0000000000c1",
+        "process_path_regex" : [
+          "^/Applications/Telegram\\.app/"
+        ]
+      },
+      {
+        "action" : "route",
+        "mode" : "or",
+        "outbound" : "direct",
+        "rules" : [
+          {
+            "ip_cidr" : [
+              "10.20.0.0/16"
+            ]
+          },
+          {
+            "domain_suffix" : [
+              "corp.example"
+            ]
+          }
+        ],
+        "type" : "logical"
+      },
+      {
+        "action" : "route",
+        "mode" : "and",
+        "outbound" : "r-00000000-0000-0000-0000-0000000000c3",
+        "rules" : [
+          {
+            "process_path_regex" : [
+              "/Minecraft$",
+              "^/usr/local/bin/game\\+1$"
+            ]
+          },
+          {
+            "port_range" : [
+              "25565:25565",
+              "27000:27100"
+            ]
+          },
+          {
+            "network" : [
+              "udp"
+            ]
+          }
+        ],
+        "type" : "logical"
+      },
+      {
+        "action" : "reject",
+        "domain_keyword" : [
+          "adserver"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,126 @@
+# Silent Route
+
+Silent Route is a macOS client for [sing-box](https://github.com/SagerNet/sing-box). It lets you decide, per site, address, country, app and port, which tunnel or proxy each piece of traffic goes through, and backs that up with a kill switch enforced by pf, so nothing leaves the Mac by a path you didn't choose.
+
+I wrote it because I needed several exits at once (some traffic direct, some through one server, some through another) and none of the existing clients handled that together with a kill switch I could trust.
+
+Runs on Intel and Apple Silicon Macs, macOS 14 Sonoma through macOS 27 Golden Gate.
+
+[Releases](../../releases)
+
+**Status:** beta. The core and the helper pass an end-to-end test on a real Mac, but the UI is still moving and there will be rough edges. If the network ever ends up in a bad state, see [Recovery](#recovery).
+
+## Features
+
+- Profiles contain servers and routes. Supported servers: Hysteria2, VLESS (incl. Reality), Trojan, Shadowsocks, VMess, SOCKS5, HTTP, HTTPS. Servers can be added from a share link or by hand; link parameters that sing-box does not support are reported instead of ignored.
+- A route matches traffic by domain, IP/CIDR, country (geoip), site list (geosite), app, port and protocol, and sends it direct, blocks it, or sends it through an ordered list of servers. The first server in the list that responds is used. Routes are evaluated top to bottom; the default route ("Everything else") is last.
+- Each route has its own kill switch setting: when none of its servers respond, its traffic is either blocked or sent direct.
+- Profiles can be switched from the menu bar while connected. If either profile uses a kill switch, traffic stays blocked until the new configuration is up.
+- Profiles are exported and imported as `.srprofile` files (JSON). Note that they contain server credentials.
+- The Monitor page shows throughput, per-app traffic and the list of open connections with the route and server used by each.
+- macOS notifications when a route fails over, falls back to direct, gets blocked or recovers. Optionally also when the VPN connects, disconnects or loses the connection.
+- The VPN is never started automatically, including after a reboot. Quitting the app turns the VPN off by default; this can be changed in Settings.
+
+### A word of caution about server lists
+
+A route with several servers fails over on its own, which is convenient, but your IP address changes in the middle of a session when it does. Banks, payment systems, marketplaces, AI services and anything else with serious anti-fraud checks see this as a session jumping between countries or providers, and may log you out, ask for verification or flag the account. For those services, give the route a single server and turn its kill switch on. Lost connectivity is better than a sudden change of address.
+
+## Installation
+
+1. Download `Silent-Route-<version>.dmg` from [Releases](../../releases).
+2. Open the image and copy Silent Route to Applications.
+3. The app is not notarized (there is no Apple Developer account behind it), so Gatekeeper blocks the first launch. Remove the quarantine attribute in Terminal:
+
+   ```sh
+   xattr -dr com.apple.quarantine "/Applications/Silent Route.app"
+   ```
+
+   Alternatively, try to open the app once, then go to System Settings → Privacy & Security and click Open Anyway.
+4. Launch the app and click Install Helper. macOS asks for an administrator password: the helper is a launchd daemon running as root that manages sing-box and pf.
+
+### Updating
+
+Settings → Updates (or Silent Route → Check for Updates…) downloads the new release, verifies its SHA-256 and code signature, replaces the app and relaunches it. Replacing the app manually with a newer DMG works as well; in that case remove the quarantine attribute again.
+
+After an update the app reinstalls the helper (administrator password). Profiles are stored by the helper in `/Library/Application Support/Silent Route` and are not affected; the installer also keeps the last ten copies in `backups/`. If the VPN was on, it reconnects with the kill switch active.
+
+### Uninstalling
+
+- Settings → Uninstall Silent Route…, or
+- `/Library/Application Support/Silent Route/Uninstall Silent Route.command`, or
+- an app cleaner such as AppCleaner. The helper detects that its files are gone, restores the network and unregisters itself.
+
+All three remove the helper, profiles, logs, the `_silentroute` group and the `sroute` symlink.
+
+### Recovery
+
+Emergency Restore (menu bar or ⇧⌘⌫) stops the VPN, removes the pf rules and repairs the default route. The same from Terminal: `sroute panic`. Nothing Silent Route sets up survives a reboot.
+
+## Design
+
+<p align="center"><img src="docs/images/design.svg" alt="Silent Route design: the app talks to the root helper over XPC; the helper runs sing-box and the pf kill switch"></p>
+
+- The helper owns all state. The app sends typed requests over XPC; the helper builds the sing-box configuration and pf rules itself and never accepts a raw config. XPC clients must be signed with the same certificate as the helper.
+- The helper copies its binaries and sing-box into root-owned directories and checks sing-box's SHA-256 against `singbox.pin` before each launch.
+- Kill switch: sing-box runs with the `_silentroute` group as its effective gid, and the pf anchor `com.apple/silentroute` only passes traffic from that group on physical interfaces (plus loopback, DHCP and, optionally, the LAN). pf therefore needs no knowledge of routing: anything not sent by sing-box is dropped. Silent Route does not modify the main pf ruleset or other anchors.
+- Failover: every 10 seconds the helper measures each server in use through the sing-box clash API and selects, for every route, the first server that responds. If sing-box exits, the pf rules stay loaded and the helper reconnects with backoff.
+- geoip/geosite rule-sets are not bundled. sing-box downloads the ones a profile references from the SagerNet rule-set repositories, caches them and refreshes them weekly.
+
+Design notes and test results are in [docs/decisions.md](docs/decisions.md).
+
+### Network access
+
+Apart from the traffic you route, the following requests are made:
+
+| Source | Destination | When |
+|---|---|---|
+| helper (via each server in use) | `www.gstatic.com/generate_204` | every 10 s while connected |
+| sing-box | `raw.githubusercontent.com` (SagerNet rule-sets) | first use of a list, then weekly |
+| app (via the server being checked) | `ipinfo.io` | when you press Check on a server |
+| app | `api.github.com` (this repository's releases) | daily, can be disabled |
+
+There is no telemetry.
+
+## Command line
+
+The helper installs `/usr/local/bin/sroute`:
+
+```
+sroute status | up | down | panic
+sroute profiles | use <profile> | import <file> | export <profile> <file> | delete <profile>
+sroute servers | routes | add <link> | remove <name>
+sroute probe <link>    test a server through a temporary local proxy
+sroute diag            interfaces, routes, other active VPNs
+```
+
+## Building
+
+Requires Swift 6 and the macOS 26 SDK (Xcode 26 or the matching Command Line Tools).
+
+```sh
+scripts/build-app.sh      # build/Silent Route.app, universal, signed with a local self-signed identity
+scripts/test.sh           # unit tests; generated configs are also checked with `sing-box check`
+swift run ui-snapshots    # renders views to PNG for review
+sudo experiments/integration/run.sh   # end-to-end test on a real Mac (turns off networking briefly)
+```
+
+Releases are built by GitHub Actions when a `v*` tag is pushed (`.github/workflows/release.yml`).
+
+| Directory | Contents |
+|---|---|
+| `Sources/VPNCore` | model, link parser, sing-box and pf generators (no I/O) |
+| `Sources/VPNHelperKit` | helper state machine, pfctl / sing-box / network adapters |
+| `Sources/SilentRouteHelper` | helper executable |
+| `Sources/SilentRouteUI`, `Sources/SilentRouteApp` | app |
+| `Sources/sroute` | CLI |
+| `Resources/install-helper.sh` | install, update, uninstall |
+
+## Legal
+
+VPN software is restricted or regulated in some countries. Make sure that using it is legal where you live; complying with local law is your responsibility. The software is provided as is, without warranty (see the license).
+
+## License
+
+GPL-3.0, see [LICENSE](LICENSE).
+
+Release builds include an unmodified sing-box binary (GPL-3.0-or-later, © nekohasekai); its source code is attached to each release. Silent Route is not affiliated with the sing-box project.
