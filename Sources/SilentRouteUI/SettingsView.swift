@@ -17,32 +17,77 @@ public struct SettingsView: View {
 
     public init(model: AppModel) { self.model = model }
 
+    @State private var pane: Pane = .general
+
+    /// The sections of the sidebar.
+    enum Pane: String, CaseIterable, Identifiable {
+        case general, notifications, updates, advanced
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .general: "General"
+            case .notifications: "Notifications"
+            case .updates: "Updates"
+            case .advanced: "Advanced"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .general: "gearshape"
+            case .notifications: "bell"
+            case .updates: "arrow.down.circle"
+            case .advanced: "wrench.and.screwdriver"
+            }
+        }
+    }
+
     public var body: some View {
-        Form {
+        // A sidebar of sections and the chosen one on the right — the
+        // layout of System Settings.
+        NavigationSplitView {
+            List(Pane.allCases, selection: $pane) { p in
+                Label(p.title, systemImage: p.symbol).tag(p)
+            }
+            .navigationSplitViewColumnWidth(200)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            Group {
+                switch pane {
+                case .general: general
+                case .notifications: notificationsTab
+                case .updates: updatesTab
+                case .advanced: advanced
+                }
+            }
+            .navigationTitle(pane.title)
+        }
+        .frame(width: 720, height: 470)
+        .sheet(isPresented: $confirmUninstall) { uninstallSheet }
+        .onAppear { launchAtLogin = SMAppService.mainApp.status == .enabled }
+    }
+
+    /// One section's page: a grouped form that scrolls when it has to.
+    private func page<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        Form { content() }
+            .formStyle(.grouped)
+    }
+
+    private var general: some View {
+        page {
             Section {
                 Picker("Appearance", selection: $appearance) {
                     ForEach(Preferences.Appearance.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: appearance) { _, a in Preferences.applyAppearance(a) }
+            }
+            Section {
                 Toggle("Open at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in setLogin(on) }
                 Text("Silent Route appears in the menu bar. The VPN does not turn on by itself — only you turn it on.")
                     .font(.caption).foregroundStyle(.secondary)
-                if let loginError { Text(loginError).font(.caption).foregroundStyle(.red) }
-            }
-            Section("Notifications") {
-                Picker("Notify about", selection: $notifications) {
-                    Text("Route changes only").tag(Preferences.Notifications.routes)
-                    Text("All events").tag(Preferences.Notifications.all)
-                }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
-                Text(notifications == .routes
-                     ? "When a route switches to a backup server, goes direct, is blocked, or comes back."
-                     : "Route changes, plus connecting, disconnecting and losing the connection.")
-                    .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let loginError { Text(loginError).font(.caption).foregroundStyle(.red) }
             }
             Section("When Silent Route quits") {
                 Picker("When Silent Route quits", selection: $quit) {
@@ -57,13 +102,56 @@ public struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            updatesSection
+        }
+    }
+
+    private var notificationsTab: some View {
+        page {
+            Section("Notify about") {
+                Picker("Notify about", selection: $notifications) {
+                    Text("Route changes only").tag(Preferences.Notifications.routes)
+                    Text("All events").tag(Preferences.Notifications.all)
+                }
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+                Text(notifications == .routes
+                     ? "When a route switches to a backup server, goes direct, is blocked, or comes back."
+                     : "Route changes, plus connecting, disconnecting and losing the connection.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                Button("Open Notification Settings…") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Text("Whether banners appear and make a sound is set in System Settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var updatesTab: some View {
+        page { updatesSection }
+    }
+
+    private var advanced: some View {
+        page {
             Section("Helper") {
                 LabeledContent("Helper version", value: model.helperVersion ?? "—")
                 LabeledContent("App build", value: AppModel.appVersion ?? "—")
                 if model.helperOutdated {
                     Button("Update Helper…") { Task { await model.installHelper() } }.disabled(model.busy)
                 }
+            }
+            Section {
+                Button("Uninstall Silent Route…", role: .destructive) { confirmUninstall = true }
+                    .foregroundStyle(.red)
+                    .disabled(model.busy)
+                Text("Removes everything: the helper, profiles, logs, settings and the app itself. macOS asks for an administrator password. Without the app: run “Uninstall Silent Route.command” in /Library/Application Support/Silent Route.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("About") {
                 Text("Silent Route is free software under the GNU GPL v3. It runs sing-box (GPL-3.0-or-later, by nekohasekai and contributors), an independent project that is not affiliated with Silent Route. Address and site lists are downloaded on first use from the sing-box project’s public rule-sets.")
@@ -73,24 +161,12 @@ public struct SettingsView: View {
                     Link("Releases and source code", destination: page).font(.callout)
                 }
             }
-            Section {
-                Button("Uninstall Silent Route…", role: .destructive) { confirmUninstall = true }
-                    .foregroundStyle(.red)
-                    .disabled(model.busy)
-                Text("Removes everything: the helper, profiles, logs, settings and the app itself. macOS asks for an administrator password. Without the app: run “Uninstall Silent Route.command” in /Library/Application Support/Silent Route.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
         }
-        .sheet(isPresented: $confirmUninstall) { uninstallSheet }
-        .formStyle(.grouped)
-        .frame(width: 460)
-        .fixedSize(horizontal: false, vertical: true)
-        .onAppear { launchAtLogin = SMAppService.mainApp.status == .enabled }
     }
 
     @ViewBuilder
     private var updatesSection: some View {
-        Section("Updates") {
+        Section {
             LabeledContent("Version", value: updater.currentVersion)
             if updater.repository == nil {
                 Text("This build has no update source. Download new versions from the project’s Releases page.")

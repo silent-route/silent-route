@@ -91,13 +91,20 @@ struct StatusDot: View {
 }
 
 enum Format {
+    /// Short and of nearly constant width, so live numbers don't make
+    /// their row jump: "900 B", "12 KB", "2.4 MB", "1.1 GB".
     static func bytes(_ n: Int64) -> String {
-        let f = ByteCountFormatter()
-        f.countStyle = .binary
-        f.allowedUnits = [.useBytes, .useKB, .useMB, .useGB]
-        f.zeroPadsFractionDigits = false
-        f.allowsNonnumericFormatting = false     // "0 bytes", never "Zero bytes"
-        return f.string(fromByteCount: n)
+        let units = ["B", "KB", "MB", "GB", "TB"]
+        var value = Double(max(0, n))
+        var unit = 0
+        while value >= 1000, unit < units.count - 1 {
+            value /= 1024
+            unit += 1
+        }
+        let number = unit > 0 && value < 10
+            ? value.formatted(.number.precision(.fractionLength(1)))
+            : value.formatted(.number.precision(.fractionLength(0)).grouping(.never))
+        return "\(number) \(units[unit])"
     }
 
     static func speed(_ bytesPerSecond: Int64) -> String { bytes(bytesPerSecond) + "/s" }

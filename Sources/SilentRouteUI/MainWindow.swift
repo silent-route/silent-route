@@ -276,17 +276,23 @@ struct ConnectionFooter: View {
                               || model.status.phase == .stopping)
             }
             if model.status.phase == .connected {
-                HStack(spacing: 12) {
+                // Fixed rows and columns: the numbers change every second,
+                // the layout never does.
+                VStack(alignment: .leading, spacing: 3) {
                     if let since = model.status.connectedSince {
                         TimelineView(.periodic(from: .now, by: 1)) { ctx in
                             Label(Format.uptime(since: since, now: ctx.date), systemImage: "clock")
                         }
                     }
-                    if let s = model.speed {
-                        Label(Format.speed(s.down), systemImage: "arrow.down")
-                        Label(Format.speed(s.up), systemImage: "arrow.up")
+                    HStack(spacing: 8) {
+                        Label(model.speed.map { Format.speed($0.down) } ?? "—", systemImage: "arrow.down")
+                            .frame(width: 78, alignment: .leading)
+                        Label(model.speed.map { Format.speed($0.up) } ?? "—", systemImage: "arrow.up")
+                            .frame(width: 78, alignment: .leading)
                     }
                 }
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
                 .labelStyle(CompactLabel())
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)

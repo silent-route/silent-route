@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1-beta
+
+- Settings are now split into sections in a sidebar (General, Notifications, Updates, Advanced), so the window fits on any screen.
+- The connection panel at the bottom of the sidebar keeps its layout: uptime and speeds sit in fixed columns and no longer wrap as the numbers change.
+- Shorter units for sizes and speeds (B, KB, MB, GB).
+
 ## 1.0.0-beta
 
 First public beta.
