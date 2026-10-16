@@ -8,6 +8,7 @@ public enum Preferences {
     public static let quitKey = "quitBehavior"
     public static let checkUpdatesKey = "checkForUpdates"
     public static let notificationsKey = "notifications"
+    public static let sessionCounterKey = "sessionCounter"
 
     public enum Appearance: String, CaseIterable, Identifiable, Sendable {
         case system, light, dark
@@ -39,6 +40,20 @@ public enum Preferences {
         /// connection.
         case all
         public var id: Self { self }
+    }
+
+    /// What the uptime and "this session" traffic count from. They go
+    /// together.
+    public enum SessionCounter: String, CaseIterable, Identifiable, Sendable {
+        /// Start again whenever the VPN reconnects.
+        case connection
+        /// From turning the VPN on to turning it off, across reconnects.
+        case session
+        public var id: Self { self }
+    }
+
+    @MainActor public static var sessionCounter: SessionCounter {
+        UserDefaults.standard.string(forKey: sessionCounterKey).flatMap(SessionCounter.init) ?? .connection
     }
 
     @MainActor public static var notifications: Notifications {

@@ -43,15 +43,24 @@ enum Daemon {
             clashAPIPort: freePort(), clashAPISecret: "",
             geoIPCountries: countries, siteLists: siteLists)
 
-        let engine = SingBoxEngine(paths: paths, group: group, trampoline: paths.helper.path)
+        // Logs name sites and servers: root only. The old shared sing-box.log
+        // (readable by every user) goes; sessions keep their own files.
+        let sessionLog = SessionLog(dir: paths.sessionLogs)
+        try? fm.removeItem(at: paths.singBoxLog)
+        try? fm.removeItem(at: paths.singBoxLog.appendingPathExtension("1"))
+        let engine = SingBoxEngine(paths: paths, group: group, trampoline: paths.helper.path,
+                                   output: { sessionLog.engineOutput() })
         let controller = Controller(
             profile: profile, options: .init(singBoxGroup: group, configEnvironment: env),
             pf: SystemPacketFilter(), engine: engine, network: SystemNetwork(),
             store: FileStateStore(url: paths.state), clock: SystemClock())
         let profiles = ProfileManager(controller: controller, store: libraryStore, library: library)
-        let service = Service(controller: controller, profiles: profiles, apiPort: env.clashAPIPort, version: version)
+        let service = Service(controller: controller, profiles: profiles, apiPort: env.clashAPIPort, version: version,
+                              sessionLog: sessionLog)
 
         Task {
+            // Before anything can begin a session.
+            await controller.setSessionHook { sessionLog.handle($0) }
             await controller.reconcileOnLaunch()
             log.info("helper ready")
         }
@@ -90,9 +99,13 @@ enum Daemon {
             while true {
                 try? await Task.sleep(for: .seconds(10))
                 let now = Date()
-                if now.timeIntervalSince(last) > 30 { log.info("wake detected") }
+                if now.timeIntervalSince(last) > 30 {
+                    log.info("wake detected")
+                    sessionLog.write("the Mac woke from sleep")
+                }
                 last = now
                 await controller.healthTick()
+                sessionLog.enforceLimit()
             }
         }
 
@@ -177,8 +190,10 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     let profiles: ProfileManager
     let apiPort: UInt16
     let version: String
+    let sessionLog: SessionLog
 
-    init(controller: Controller, profiles: ProfileManager, apiPort: UInt16, version: String) {
+    init(controller: Controller, profiles: ProfileManager, apiPort: UInt16, version: String, sessionLog: SessionLog) {
+        self.sessionLog = sessionLog
         self.controller = controller
         self.profiles = profiles
         self.apiPort = apiPort
@@ -186,8 +201,11 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     }
 
     func call(_ request: Data, reply: @escaping @Sendable (Data) -> Void) {
+        // Who is asking: macOS vouches for the connection's user. Logs are
+        // per user, so this decides whose sessions a request can see.
+        let uid = NSXPCConnection.current()?.effectiveUserIdentifier ?? 0
         Task {
-            let response = await handle(request)
+            let response = await handle(request, uid: uid)
             reply((try? JSONEncoder().encode(response)) ?? Data())
         }
     }
@@ -202,7 +220,7 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                             library: library ? lib : nil, api: api, helperVersion: version)
     }
 
-    func handle(_ data: Data) async -> IPC.Response {
+    func handle(_ data: Data, uid: uid_t) async -> IPC.Response {
         guard let env = try? JSONDecoder().decode(IPC.Envelope.self, from: data) else {
             return IPC.Response(error: "Malformed request")
         }
@@ -214,6 +232,7 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
             case .status:
                 break
             case .start:
+                sessionLog.setOwner(uid)
                 try await controller.start()
             case .stop:
                 await controller.stop()
@@ -229,6 +248,15 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 return await respond(library: true)
             case .activateProfile(let id):
                 try await profiles.activate(id)
+            case .listLogs:
+                var r = await respond()
+                r.logs = sessionLog.sessions(of: uid)
+                return r
+            case .readLog(let id):
+                guard let text = sessionLog.text(of: id, for: uid) else { return await respond(error: "No such log") }
+                var r = await respond()
+                r.logText = text
+                return r
             case .apiCredentials:
                 guard let secret = await controller.currentAPISecret else {
                     return await respond(error: "Not connected")

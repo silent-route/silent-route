@@ -67,14 +67,15 @@ public enum LinkParser {
         switch kind {
         case .proxy:
             guard let scheme else {
-                var r = try proxy(text, kind: proxyKind, tls: false, id: id, lenient: true)
+                var r = try proxy(normalizedProxy(text) ?? text, kind: proxyKind, tls: false, id: id, lenient: true)
                 r.tunnel.origin = .manual
                 return r
             }
             guard proxySchemes.contains(scheme) else {
                 throw .unsupported("a \(scheme):// link is a tunnel, not a proxy — add it as a tunnel")
             }
-            let rest = String(text[text.range(of: "://")!.upperBound...])
+            var rest = String(text[text.range(of: "://")!.upperBound...])
+            rest = normalizedProxy(rest) ?? rest
             var r = try proxy(rest, kind: scheme.hasPrefix("socks") ? .socks5 : .http, tls: scheme == "https",
                               id: id, lenient: true)
             r.tunnel.origin = .link(text)
@@ -420,6 +421,71 @@ public enum LinkParser {
                        server: Endpoint(host: parts.host, port: port),
                        proto: .proxy(Proxy(kind: kind, username: user, password: pass, tls: tls)))
         return Result(tunnel: t, warnings: p.finish())
+    }
+
+    /// The forms proxy sellers hand out, rewritten as `user:pass@host:port`:
+    ///
+    ///     host:port:user:pass     user:pass:host:port
+    ///     host:port@user:pass     user:pass@host:port
+    ///     host:port user:pass     user:pass host:port
+    ///     host:port|user:pass     user:pass|host:port
+    ///
+    /// Which half is the server is decided by its shape: an IP address or a
+    /// domain name, then a port. Nil when the text is none of these; it is
+    /// then parsed as it is.
+    static func normalizedProxy(_ s: String) -> String? {
+        var body = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        var tail = ""
+        if let i = body.firstIndex(where: { $0 == "#" || $0 == "?" }) {
+            tail = String(body[i...])
+            body = String(body[..<i])
+        }
+        guard !body.isEmpty, !body.contains("["), !body.contains("/") else { return nil }
+
+        func server(_ x: Substring) -> (host: String, port: String)? {
+            let p = x.split(separator: ":", omittingEmptySubsequences: false)
+            guard p.count == 2, !p[1].isEmpty, p[1].allSatisfy(\.isASCIIDigit), let n = UInt16(p[1]), n > 0 else { return nil }
+            let host = String(p[0]).lowercased()
+            guard host.contains(".") || host == "localhost", isValidHost(host) else { return nil }
+            return (host, String(p[1]))
+        }
+        func build(_ host: (host: String, port: String), user: Substring, pass: Substring) -> String? {
+            guard !user.isEmpty else { return nil }
+            let u = String(user).addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? String(user)
+            let p = String(pass).addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? String(pass)
+            return (p.isEmpty ? u : "\(u):\(p)") + "@\(host.host):\(host.port)" + tail
+        }
+        func credentials(_ x: Substring) -> (Substring, Substring) {
+            guard let c = x.firstIndex(of: ":") else { return (x, "") }
+            return (x[..<c], x[x.index(after: c)...])
+        }
+
+        // Two halves around a separator: the server on either side.
+        for (i, ch) in zip(body.indices, body) where ch == "@" || ch == "|" || ch == " " || ch == "\t" {
+            let a = body[..<i].trimmingCharacters(in: .whitespaces)[...]
+            let b = body[body.index(after: i)...].trimmingCharacters(in: .whitespaces)[...]
+            if let srv = server(b), server(a) == nil || ch == "@" {
+                // user:pass@host:port is already the standard form.
+                if ch == "@" { return nil }
+                let (u, p) = credentials(a)
+                if let r = build(srv, user: u, pass: p) { return r }
+            }
+            if let srv = server(a), server(b) == nil {
+                let (u, p) = credentials(b)
+                if let r = build(srv, user: u, pass: p) { return r }
+            }
+        }
+
+        // No separator: four (or more) fields joined by colons.
+        let f = body.split(separator: ":", omittingEmptySubsequences: false)
+        guard f.count >= 4 else { return nil }
+        if let srv = server(body[f[0].startIndex..<f[1].endIndex]) {
+            return build(srv, user: f[2], pass: body[f[3].startIndex...])
+        }
+        if let srv = server(body[f[f.count - 2].startIndex..<f[f.count - 1].endIndex]) {
+            return build(srv, user: f[0], pass: body[f[1].startIndex..<f[f.count - 3].endIndex])
+        }
+        return nil
     }
 
     // MARK: - Shadowsocks

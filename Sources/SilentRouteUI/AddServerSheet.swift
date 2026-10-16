@@ -97,7 +97,7 @@ struct AddServerSheet: View {
             HStack {
                 TextField("", text: $linkText, prompt: Text(draft.kind == .tunnel
                     ? "Paste a link to fill the form: vless://, hysteria2://, trojan://, ss://, vmess://"
-                    : "Paste a link to fill the form: socks5://user:pass@host:port, http://…"))
+                    : "Paste a proxy: socks5://…, http://…, host:port:user:pass, user:pass@host:port…"))
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(applyLink)
                     .onChange(of: linkText) { _, new in if new.contains("://") || new.contains("@") { applyLink() } }

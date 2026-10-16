@@ -134,6 +134,55 @@ import Testing
 
     // MARK: failures while connected
 
+    /// Two clocks: the connection restarts with a reconnect, the session
+    /// lasts from turning on to turning off.
+    @Test func sessionStartSurvivesReconnects() async throws {
+        let h = Harness()
+        try await h.controller.start()
+        let first = try #require(await h.controller.status.connectedSince)
+        #expect(await h.controller.status.sessionSince == first)
+        try await h.clock.sleep(seconds: 300)
+        await h.world.crashAll()
+        #expect(await h.waitWorld { $0.log.contains("engine.launch(101)") })
+        #expect(await h.wait(for: .connected))
+        #expect(await h.controller.status.sessionSince == first)
+        #expect(await h.controller.status.connectedSince != first)
+        await h.controller.stop()
+        #expect(await h.controller.status.sessionSince == nil)
+        try await h.clock.sleep(seconds: 60)
+        try await h.controller.start()
+        #expect(await h.controller.status.sessionSince != first)
+    }
+
+    /// The session log hears when a session begins and ends, and why.
+    @Test func sessionEventsGoToTheLog() async throws {
+        let h = Harness()
+        let events = Events()
+        await h.controller.setSessionHook { e in events.add(e) }
+        try await h.controller.start()
+        await h.world.crashAll()
+        #expect(await h.waitWorld { $0.log.contains("engine.launch(101)") })
+        #expect(await h.wait(for: .connected))
+        await h.controller.stop()
+        await h.controller.stop()                   // no second "ended"
+        let got = events.all
+        #expect(got.first == .began(profile: await h.controller.profile.name, resumed: false))
+        #expect(got.contains(.note("connected")))
+        #expect(got.contains { if case .note(let t) = $0 { t.hasPrefix("reconnecting") } else { false } })
+        #expect(got.last == .ended(reason: "turned off"))
+        #expect(got.filter { if case .ended = $0 { true } else { false } }.count == 1)
+    }
+
+    @Test func aFailedStartEndsItsSession() async {
+        let h = Harness()
+        let events = Events()
+        await h.controller.setSessionHook { e in events.add(e) }
+        await h.world.set { $0.launchFails = true }
+        try? await h.controller.start()
+        #expect(events.all.count == 2)
+        if case .ended(let reason) = events.all.last { #expect(reason.hasPrefix("could not connect")) } else { Issue.record("not ended") }
+    }
+
     @Test func crashKeepsBlockingAndReconnects() async throws {
         let h = Harness()
         try await h.controller.start()
@@ -170,12 +219,68 @@ import Testing
         let h = Harness()
         try await h.controller.start()
         await h.world.set { $0.healthy = false }
-        // One bad check is not enough: a single exit may be failing over.
+        // Checks in quick succession are not enough: only silence for
+        // longer than restartAfterSeconds (12 s) restarts sing-box.
+        await h.controller.healthTick()
         await h.controller.healthTick()
         #expect(await h.controller.status.phase == .connected)
+        try await h.clock.sleep(seconds: 10)
+        await h.controller.healthTick()
+        #expect(await h.controller.status.phase == .connected)
+        try await h.clock.sleep(seconds: 10)
         await h.controller.healthTick()
         #expect(await h.controller.status.phase == .reconnecting)
         #expect(await h.world.blocking)
+        await h.world.set { $0.healthy = true }
+        #expect(await h.wait(for: .connected))
+        await h.controller.stop()
+    }
+
+    /// A network change that heals within a few seconds keeps sing-box and
+    /// every connection through it (a call survives a Wi-Fi switch).
+    @Test func shortOutageAfterNetworkChangeKeepsTheEngine() async throws {
+        let h = Harness()
+        try await h.controller.start()
+        // Real time per quick check, so the test can step in between them.
+        h.clock.realDelay = .milliseconds(30)
+        func rounds() -> Int { h.clock.recordedSleeps.filter { $0 == 2 }.count }
+        await h.world.set { $0.healthy = false }
+        // A burst of change reports starts one round of quick checks.
+        await h.controller.networkChanged()
+        await h.controller.networkChanged()
+        await h.controller.networkChanged()
+        #expect(await Self.until { rounds() >= 2 })        // 4 s without an answer
+        await h.world.set { $0.healthy = true }             // the new network is up
+        // The checks stop as soon as the servers answer: one more round at
+        // most, and one round of checks for the whole burst of reports.
+        try await Task.sleep(for: .milliseconds(300))
+        #expect((2...3).contains(rounds()))
+        #expect(await h.controller.status.phase == .connected)
+        #expect(await h.world.log.filter { $0.hasPrefix("engine.launch") }.count == 1, "sing-box was not restarted")
+        h.clock.realDelay = nil
+        await h.controller.stop()
+    }
+
+    /// Polls a condition for up to two seconds of real time.
+    static func until(_ cond: () -> Bool) async -> Bool {
+        for _ in 0..<200 {
+            if cond() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    @Test func longOutageAfterNetworkChangeRestarts() async throws {
+        let h = Harness()
+        try await h.controller.start()
+        await h.world.set { $0.healthy = false }
+        await h.controller.networkChanged()
+        // Quick checks every 2 s; after 12 s of silence sing-box restarts
+        // behind the kill switch.
+        #expect(await h.wait(for: .reconnecting) { _ in true })
+        #expect(await h.world.blocking)
+        let sleeps = h.clock.recordedSleeps.filter { $0 == 2 }
+        #expect(sleeps.count >= 6)
         await h.world.set { $0.healthy = true }
         #expect(await h.wait(for: .connected))
         await h.controller.stop()
@@ -436,4 +541,11 @@ import Testing
             #expect(await h.world.running.isEmpty)
         }
     }
+}
+
+final class Events: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [SessionEvent] = []
+    func add(_ e: SessionEvent) { lock.withLock { list.append(e) } }
+    var all: [SessionEvent] { lock.withLock { list } }
 }

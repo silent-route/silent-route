@@ -15,12 +15,13 @@ public struct MainWindow: View {
 
     enum Item: Hashable {
         case monitor
+        case logs
         case profile(Profile.ID)
     }
 
-    public init(model: AppModel, selection: Profile.ID? = nil, showMonitor: Bool = false) {
+    public init(model: AppModel, selection: Profile.ID? = nil, showMonitor: Bool = false, showLogs: Bool = false) {
         self.model = model
-        _selection = State(initialValue: showMonitor ? .monitor : selection.map(Item.profile))
+        _selection = State(initialValue: showLogs ? .logs : showMonitor ? .monitor : selection.map(Item.profile))
     }
 
     /// For the snapshot tool: the Monitor page with given data.
@@ -75,7 +76,7 @@ public struct MainWindow: View {
         }
         .onChange(of: model.library.profiles.map(\.id)) { _, ids in
             if case .profile(let s) = selection, ids.contains(s) { return }
-            if selection == .monitor { return }
+            if selection == .monitor || selection == .logs { return }
             selection = (model.library.activeID ?? ids.first).map(Item.profile)
         }
         .onChange(of: selection) { _, new in
@@ -93,6 +94,7 @@ public struct MainWindow: View {
     private var sidebar: some View {
         List(selection: $selection) {
             Label("Monitor", systemImage: "chart.xyaxis.line").tag(Item.monitor)
+            Label("Logs", systemImage: "doc.text").tag(Item.logs)
             Section("Profiles") {
                 ForEach(Array(model.library.profiles.enumerated()), id: \.element.id) { i, p in
                     ProfileRow(profile: p, isActive: p.id == model.library.activeID, status: model.status)
@@ -152,6 +154,8 @@ public struct MainWindow: View {
             switch selection {
             case .monitor:
                 MonitorView(model: model, monitor: monitor)
+            case .logs:
+                LogsView(model: model)
             case .profile(let id):
                 if let p = model.library.profile(id) {
                     ProfileEditor(model: model, saved: p).id(id)
@@ -279,7 +283,7 @@ struct ConnectionFooter: View {
                 // Fixed rows and columns: the numbers change every second,
                 // the layout never does.
                 VStack(alignment: .leading, spacing: 3) {
-                    if let since = model.status.connectedSince {
+                    if let since = model.uptimeSince {
                         TimelineView(.periodic(from: .now, by: 1)) { ctx in
                             Label(Format.uptime(since: since, now: ctx.date), systemImage: "clock")
                         }

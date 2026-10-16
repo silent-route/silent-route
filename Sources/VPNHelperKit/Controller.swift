@@ -29,6 +29,12 @@ public actor Controller {
         public var singBoxGroup: UInt32
         public var tunWaitSeconds: Double = 15
         public var maxBackoffSeconds: Double = 30
+        /// sing-box is restarted only after no server has answered for this
+        /// long. A restart drops every connection (a call, a download), and
+        /// a network change usually heals by itself within a few seconds.
+        public var restartAfterSeconds: Double = 12
+        /// After a network change, how often to look until servers answer.
+        public var probeIntervalSeconds: Double = 2
         /// Environment for config generation, minus the per-start clash API
         /// port and secret, which the controller fills in.
         public var configEnvironment: SingBoxConfig.Environment
@@ -68,6 +74,9 @@ public actor Controller {
     private var enginePID: Int32?
     private var pfToken: String?
     private var connectedSince: Date?
+    /// When the user turned the VPN on: kept across reconnects, cleared when
+    /// it is turned off.
+    private var sessionSince: Date?
     private var lastError: String?
     private var attempts = 0
     private var wantConnected = false
@@ -79,7 +88,28 @@ public actor Controller {
     /// Where each route's selector points now.
     private var via: [UUID: RouteState.Via] = [:]
     /// Consecutive checks in which no exit at all answered.
-    private var allDownChecks = 0
+    /// The session log's ear: told when a session begins and ends and what
+    /// happens in between. Set by the daemon; nil in most tests.
+    private var sessionHook: (@Sendable (SessionEvent) -> Void)?
+    private var inSession = false
+
+    public func setSessionHook(_ hook: @escaping @Sendable (SessionEvent) -> Void) {
+        sessionHook = hook
+    }
+
+    private func session(_ e: SessionEvent) {
+        switch e {
+        case .began: inSession = true
+        case .ended: guard inSession else { return }; inSession = false
+        case .note: guard inSession else { return }
+        }
+        sessionHook?(e)
+    }
+
+    /// When the servers stopped answering, while they still don't.
+    private var downSince: Date?
+    /// The quick checks after a network change; one at a time.
+    private var probing: Task<Void, Never>?
 
     public init(profile: Profile, options: Options, pf: PacketFilter, engine: Engine, network: NetworkInspector,
                 store: StateStore, clock: Clock) {
@@ -95,7 +125,7 @@ public actor Controller {
     // MARK: - Status
 
     public var status: Status {
-        Status(phase: phase, connectedSince: connectedSince,
+        Status(phase: phase, connectedSince: connectedSince, sessionSince: sessionSince,
                killSwitchOn: pfToken != nil, lastError: lastError, reconnectAttempts: attempts,
                servers: phase == .connected ? latency.keys.sorted { $0.uuidString < $1.uuidString }
                    .map { ServerState(id: $0, latencyMs: latency[$0] ?? nil) } : [],
@@ -136,6 +166,7 @@ public actor Controller {
         wantConnected = true
         lastError = nil
         attempts = 0
+        session(.began(profile: profile.name, resumed: false))
         set(.connecting)
         do {
             try await connect(epoch: my, keepBlockingOnFailure: false)
@@ -143,12 +174,14 @@ public actor Controller {
             if epoch == my {
                 wantConnected = false
                 set(.off, error: e.description)
+                session(.ended(reason: "could not connect — \(e.description)"))
             }
             throw e
         } catch {
             if epoch == my {
                 wantConnected = false
                 set(.off, error: error.localizedDescription)
+                session(.ended(reason: "could not connect — \(error.localizedDescription)"))
             }
             throw .failed(error.localizedDescription)
         }
@@ -163,6 +196,7 @@ public actor Controller {
         await teardown()
         lastError = nil
         set(.off)
+        session(.ended(reason: "turned off"))
     }
 
     /// Like stop, but assumes nothing works: kills hard, releases pf, repairs
@@ -184,7 +218,9 @@ public actor Controller {
         if let token { await pfRun { await $0.release(token: token) } }
         if let pid { await engine.terminate(pid: pid) }
         await network.restoreRouting()
+        session(.ended(reason: "Emergency Restore"))
         connectedSince = nil
+        sessionSince = nil
         set(.off)
     }
 
@@ -203,6 +239,9 @@ public actor Controller {
         }
         guard phase == .connected || phase == .reconnecting || phase == .off else { throw .busy(phase) }
         let guarded = profile.protectionMode != .off || new.protectionMode != .off
+        if running {
+            session(.note(new.id == profile.id ? "profile edited; applying the changes" : "profile switched to “\(new.name)”"))
+        }
         profile = new
         guard running else { publish(); return }
         epoch += 1
@@ -243,17 +282,22 @@ public actor Controller {
         guard epoch == my, phase == .connected else { return }
         let anyUp = await checkServers(epoch: my)
         guard epoch == my, phase == .connected else { return }
-        // Fallbacks handle single exits. Nothing answering twice in a row —
-        // not even through a fallback — means sing-box or the network under
-        // it is stuck (sleep, a network change): restart it behind the
-        // kill switch.
-        allDownChecks = anyUp ? 0 : allDownChecks + 1
-        if allDownChecks >= 2 {
-            allDownChecks = 0
-            epoch += 1
-            if let pid = enginePID { enginePID = nil; await engine.terminate(pid: pid) }
-            beginRecovery(epoch: epoch, reason: "no exit answers")
-        }
+        await judge(anyUp: anyUp, epoch: my)
+    }
+
+    /// Fallbacks handle single servers. No server answering at all, for
+    /// longer than `restartAfterSeconds`, means sing-box or the network under
+    /// it is stuck (sleep, a network change): restart it behind the kill
+    /// switch. Shorter outages are waited out, so connections survive them.
+    private func judge(anyUp: Bool, epoch my: Int) async {
+        guard !anyUp else { downSince = nil; return }
+        let now = clock.now()
+        guard let since = downSince else { downSince = now; return }
+        guard now.timeIntervalSince(since) >= options.restartAfterSeconds else { return }
+        downSince = nil
+        epoch += 1
+        if let pid = enginePID { enginePID = nil; await engine.terminate(pid: pid) }
+        beginRecovery(epoch: epoch, reason: "no exit answers")
     }
 
     /// Measures every server in use and points each route's selector at
@@ -261,6 +305,14 @@ public actor Controller {
     /// switch off) or its first, dead server, which fails every connection
     /// (kill switch on). Returns whether any server answered.
     @discardableResult
+    private func describe(_ v: RouteState.Via) -> String {
+        switch v {
+        case .server(let id): "now through “\(profile.tunnels.first { $0.id == id }?.name ?? "a server")”"
+        case .direct: "no server answers; going direct"
+        case .blocked: "no server answers; blocked by its kill switch"
+        }
+    }
+
     private func checkServers(epoch my: Int) async -> Bool {
         let engine = self.engine
         let routes = profile.serverRoutes
@@ -287,6 +339,7 @@ public actor Controller {
             do {
                 try await engine.select(SingBoxConfig.routeTag(r.id), member: member)
                 guard epoch == my else { return false }
+                if via[r.id] != nil { session(.note("route “\(r.name)”: \(describe(next))")) }
                 via[r.id] = next
             } catch {
                 // Left as it was; the next check tries again.
@@ -296,10 +349,27 @@ public actor Controller {
         return measured.values.contains { $0 != nil }
     }
 
-    /// After sleep or a network change: check right away rather than waiting
-    /// for the next tick.
+    /// After sleep or a network change: look every couple of seconds until
+    /// the servers answer again, instead of waiting for the next tick. The
+    /// system reports changes in bursts (our own TUN coming up is one), so
+    /// one round of checks covers them all.
     public func networkChanged() async {
-        await healthTick()
+        guard phase == .connected, probing == nil else { return }
+        let my = epoch
+        probing = Task { [weak self] in await self?.probe(epoch: my) }
+    }
+
+    private func probe(epoch my: Int) async {
+        let rounds = Int((options.restartAfterSeconds / options.probeIntervalSeconds).rounded(.up)) + 1
+        for _ in 0..<rounds {
+            do { try await clock.sleep(seconds: options.probeIntervalSeconds) } catch { break }
+            guard epoch == my, phase == .connected else { break }
+            let anyUp = await checkServers(epoch: my)
+            guard epoch == my, phase == .connected else { break }
+            await judge(anyUp: anyUp, epoch: my)
+            if anyUp { break }
+        }
+        probing = nil
     }
 
     // MARK: - Helper start-up
@@ -332,6 +402,7 @@ public actor Controller {
                 lastError = "Could not enable the kill switch: \(error.localizedDescription)"
             }
             if resume {
+                session(.began(profile: profile.name, resumed: true))
                 wantConnected = true
                 epoch += 1
                 beginRecovery(epoch: epoch, reason: nil)
@@ -376,6 +447,7 @@ public actor Controller {
         recovery = nil
         let wanted = wantConnected
         await teardown()
+        session(.ended(reason: wanted ? "the helper stopped (an update or a shutdown)" : "the helper stopped"))
         wantConnected = wanted
         phase = .off
         publish()
@@ -448,7 +520,7 @@ public actor Controller {
             throw CommandError.failed("No server answers — check the servers")
         }
         guard epoch == my, let tun else { return }
-        allDownChecks = 0
+        downSince = nil
 
         // Kill switch last.
         if profile.protectionMode == .off {
@@ -461,9 +533,11 @@ public actor Controller {
                 guard epoch == my else { return }
             }
             connectedSince = clock.now()
+            sessionSince = sessionSince ?? connectedSince
             attempts = 0
             lastError = nil
             set(.connected)
+            session(.note("connected"))
             return
         }
         let connectedRules = try rules(tun: tun)
@@ -481,9 +555,11 @@ public actor Controller {
         }
         guard epoch == my else { return }
         connectedSince = clock.now()
+        sessionSince = sessionSince ?? connectedSince
         attempts = 0
         lastError = nil
         set(.connected)
+        session(.note("connected"))
     }
 
     // MARK: pf, in order
@@ -528,6 +604,7 @@ public actor Controller {
     private func beginRecovery(epoch my: Int, reason: String?) {
         recovery?.cancel()
         if let reason { lastError = reason }
+        session(.note(reason.map { "reconnecting: \($0)" } ?? "reconnecting"))
         set(.reconnecting)
         recovery = Task { [weak self] in
             await self?.recover(epoch: my)
@@ -552,6 +629,7 @@ public actor Controller {
                 guard epoch == my else { return }
                 attempts += 1
                 lastError = "\(error)"
+                session(.note("attempt \(attempts) failed: \(error)"))
                 set(.reconnecting)
                 if let pid = enginePID { await killEngine(pid) }
                 let delay = min(options.maxBackoffSeconds, pow(2, Double(min(attempts, 10)) - 1))
@@ -568,6 +646,7 @@ public actor Controller {
             await engine.terminate(pid: pid)
         }
         connectedSince = nil
+        sessionSince = nil
         apiSecret = nil
         if profile.protectionMode == .always, let r = try? rules(tun: nil) {
             // "Always" means blocked whenever not connected.

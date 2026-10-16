@@ -16,9 +16,14 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
     private let lock = NSLock()
     private var processes: [Int32: Process] = [:]
     private var api: (port: Int, secret: String)?
+    /// Where sing-box's output goes: the session log's file. Without one
+    /// (it should not happen) the shared sing-box.log.
+    private let output: @Sendable () -> FileHandle?
 
     public init(paths: Paths, group: UInt32, trampoline: String,
-                expectedSHA256: String? = VPNCore.singBoxSHA256[SingBoxEngine.machineArch]) {
+                expectedSHA256: String? = VPNCore.singBoxSHA256[SingBoxEngine.machineArch],
+                output: @escaping @Sendable () -> FileHandle? = { nil }) {
+        self.output = output
         self.paths = paths
         self.group = group
         self.trampoline = trampoline
@@ -74,13 +79,18 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
         try writeConfig(config)
         let api = Self.clashAPI(in: config)
 
-        try FileManager.default.createDirectory(at: paths.logs, withIntermediateDirectories: true)
-        rotateLog()
-        if !FileManager.default.fileExists(atPath: paths.singBoxLog.path) {
-            FileManager.default.createFile(atPath: paths.singBoxLog.path, contents: nil, attributes: [.posixPermissions: 0o644])
+        let log: FileHandle
+        if let session = output() {
+            log = session
+        } else {
+            try FileManager.default.createDirectory(at: paths.logs, withIntermediateDirectories: true)
+            rotateLog()
+            if !FileManager.default.fileExists(atPath: paths.singBoxLog.path) {
+                FileManager.default.createFile(atPath: paths.singBoxLog.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            }
+            log = try FileHandle(forWritingTo: paths.singBoxLog)
+            log.seekToEndOfFile()
         }
-        let log = try FileHandle(forWritingTo: paths.singBoxLog)
-        log.seekToEndOfFile()
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: trampoline)

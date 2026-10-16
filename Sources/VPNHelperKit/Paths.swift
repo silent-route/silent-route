@@ -26,6 +26,8 @@ public struct Paths: Sendable {
     public var state: URL { root.appendingPathComponent("state.json") }
     public var logs: URL { URL(fileURLWithPath: "/Library/Logs/Silent Route") }
     public var singBoxLog: URL { logs.appendingPathComponent("sing-box.log") }
+    /// One file per VPN session (root only).
+    public var sessionLogs: URL { logs.appendingPathComponent("sessions") }
 
     public static let bundleID = "org.silentroute.app"
     public static let machService = "org.silentroute.app.helper"

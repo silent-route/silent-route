@@ -126,7 +126,12 @@ do_install() {
   version=$(defaults read "$contents/Info.plist" CFBundleVersion 2>/dev/null || echo unknown)
 
   ensure_group
-  install -d -o root -g wheel -m 0755 "$ROOT" "$ROOT/rules" "$LOGS"
+  install -d -o root -g wheel -m 0755 "$ROOT" "$ROOT/rules"
+  # Logs name sites and servers: root only (the app reads them via the helper).
+  install -d -o root -g wheel -m 0700 "$LOGS"
+  chmod 0700 "$LOGS"
+  [ -f "$LOGS/helper.log" ] || install -o root -g wheel -m 0600 /dev/null "$LOGS/helper.log"
+  chmod 0600 "$LOGS/helper.log"
   install -d -o root -g wheel -m 0700 "$ROOT/run" "$ROOT/backups"
 
   # 1. Stage the new files next to the current ones; nothing running changes yet.

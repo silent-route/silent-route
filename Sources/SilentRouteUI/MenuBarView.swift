@@ -151,7 +151,7 @@ public struct MenuBarView: View {
             }
             if model.status.phase == .connected {
                 HStack(spacing: 14) {
-                    if let since = model.status.connectedSince {
+                    if let since = model.uptimeSince {
                         TimelineView(.periodic(from: .now, by: 1)) { ctx in
                             Label(Format.uptime(since: since, now: ctx.date), systemImage: "clock")
                         }

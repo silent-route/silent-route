@@ -90,11 +90,19 @@ struct RouteCard: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Spacer()
+                if !isDefault {
+                    // Order matters (first match wins): arrows as in a
+                    // route's server list.
+                    Button { move(by: -1) } label: { Image(systemName: "chevron.up") }
+                        .buttonStyle(.borderless).disabled(index == 0)
+                        .help("Move up: checked earlier")
+                    Button { move(by: 1) } label: { Image(systemName: "chevron.down") }
+                        .buttonStyle(.borderless).disabled(index == profile.routes.count - 1)
+                        .help("Move down: checked later")
+                }
                 Button("Edit", action: edit).controlSize(.small)
                 if !isDefault {
                     Menu {
-                        Button("Move Up") { move(by: -1) }.disabled(index == 0)
-                        Button("Move Down") { move(by: 1) }.disabled(index == profile.routes.count - 1)
                         Button("Duplicate") {
                             var copy = route
                             copy.id = UUID()

@@ -13,6 +13,7 @@ public struct SettingsView: View {
     @AppStorage(Preferences.quitKey) private var quit = Preferences.Quit.disconnect
     @AppStorage(Preferences.checkUpdatesKey) private var checkUpdates = true
     @AppStorage(Preferences.notificationsKey) private var notifications = Preferences.Notifications.routes
+    @AppStorage(Preferences.sessionCounterKey) private var sessionCounter = Preferences.SessionCounter.connection
     private let updater = Updater.shared
 
     public init(model: AppModel) { self.model = model }
@@ -88,6 +89,19 @@ public struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let loginError { Text(loginError).font(.caption).foregroundStyle(.red) }
+            }
+            Section("Connection time and traffic") {
+                Picker("Connection time and traffic", selection: $sessionCounter) {
+                    Text("Start again after a reconnect").tag(Preferences.SessionCounter.connection)
+                    Text("Count from turning the VPN on").tag(Preferences.SessionCounter.session)
+                }
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+                Text(sessionCounter == .connection
+                     ? "The time and the traffic shown in the menu bar and the window count the current connection."
+                     : "The time and the traffic count the whole session, across reconnects and profile switches, until you turn the VPN off.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("When Silent Route quits") {
                 Picker("When Silent Route quits", selection: $quit) {

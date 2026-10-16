@@ -12,13 +12,15 @@ Runs on Intel and Apple Silicon Macs, macOS 14 Sonoma through macOS 27 Golden Ga
 
 ## Features
 
-- Profiles contain servers and routes. Supported servers: Hysteria2, VLESS (incl. Reality), Trojan, Shadowsocks, VMess, SOCKS5, HTTP, HTTPS. Servers can be added from a share link or by hand; link parameters that sing-box does not support are reported instead of ignored.
+- Profiles contain servers and routes. Supported servers: Hysteria2, VLESS (incl. Reality), Trojan, Shadowsocks, VMess, SOCKS5, HTTP, HTTPS. Servers can be added from a share link, by hand, or by pasting a proxy in the usual seller formats (`host:port:user:pass`, `user:pass@host:port`, `user:pass|host:port` and the like); link parameters that sing-box does not support are reported instead of ignored.
 - A route matches traffic by domain, IP/CIDR, country (geoip), site list (geosite), app, port and protocol, and sends it direct, blocks it, or sends it through an ordered list of servers. The first server in the list that responds is used. Routes are evaluated top to bottom; the default route ("Everything else") is last.
 - Each route has its own kill switch setting: when none of its servers respond, its traffic is either blocked or sent direct.
 - Profiles can be switched from the menu bar while connected. If either profile uses a kill switch, traffic stays blocked until the new configuration is up.
 - Profiles are exported and imported as `.srprofile` files (JSON). Note that they contain server credentials.
 - The Monitor page shows throughput, per-app traffic and the list of open connections with the route and server used by each.
 - macOS notifications when a route fails over, falls back to direct, gets blocked or recovers. Optionally also when the VPN connects, disconnects or loses the connection.
+- Session logs: each time the VPN is turned on, its session (connects, reconnects and why, failovers, sing-box warnings and errors) is logged. A session belongs to the macOS user who turned the VPN on: each user sees only their own sessions (the last 30), in the app under Logs, with a filter for problems and a way to copy or save a log with addresses and names removed.
+- Short network drops (a Wi-Fi switch, waking from sleep) don't restart sing-box: the helper checks the servers every 2 seconds and restarts only after 12 seconds without an answer, so calls and downloads often survive the drop. Traffic stays blocked meanwhile where the kill switch is on.
 - The VPN is never started automatically, including after a reboot. Quitting the app turns the VPN off by default; this can be changed in Settings.
 
 ### A word of caution about server lists
@@ -61,6 +63,7 @@ Emergency Restore (menu bar or ⇧⌘⌫) stops the VPN, removes the pf rules an
 <p align="center"><img src="docs/images/design.svg" alt="Silent Route design: the app talks to the root helper over XPC; the helper runs sing-box and the pf kill switch"></p>
 
 - The helper owns all state. The app sends typed requests over XPC; the helper builds the sing-box configuration and pf rules itself and never accepts a raw config. XPC clients must be signed with the same certificate as the helper.
+- Logs live in `/Library/Logs/Silent Route/sessions/<uid>/` (folders 0700, files 0600, owned by root): a log can name the sites you visit and your servers. The helper gives each user only their own sessions — macOS tells it which user an XPC request comes from — so other accounts on the Mac cannot read them.
 - The helper copies its binaries and sing-box into root-owned directories and checks sing-box's SHA-256 against `singbox.pin` before each launch.
 - Kill switch: sing-box runs with the `_silentroute` group as its effective gid, and the pf anchor `com.apple/silentroute` only passes traffic from that group on physical interfaces (plus loopback, DHCP and, optionally, the LAN). pf therefore needs no knowledge of routing: anything not sent by sing-box is dropped. Silent Route does not modify the main pf ruleset or other anchors.
 - Failover: every 10 seconds the helper measures each server in use through the sing-box clash API and selects, for every route, the first server that responds. If sing-box exits, the pf rules stay loaded and the helper reconnects with backoff.

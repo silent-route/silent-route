@@ -32,6 +32,36 @@ import Testing
         #expect(https.tunnel.proto.displayName == "HTTPS proxy")
     }
 
+    /// The shapes proxy sellers use, in the proxy sheet. Fictitious values.
+    @Test(arguments: [
+        "203.0.113.7:8514:User42:Pa55word",
+        "203.0.113.7:8514 User42:Pa55word",
+        "203.0.113.7:8514@User42:Pa55word",
+        "203.0.113.7:8514|User42:Pa55word",
+        "User42:Pa55word:203.0.113.7:8514",
+        "User42:Pa55word@203.0.113.7:8514",
+        "User42:Pa55word|203.0.113.7:8514",
+        "User42:Pa55word 203.0.113.7:8514",
+        "  socks5://203.0.113.7:8514:User42:Pa55word  ",
+    ])
+    func sellerProxyFormats(_ text: String) throws {
+        let t = try LinkParser.parse(text, expecting: .proxy).tunnel
+        #expect(t.server == Endpoint(host: "203.0.113.7", port: 8514))
+        #expect(t.proto == .proxy(Proxy(kind: .socks5, username: "User42", password: "Pa55word")))
+    }
+
+    @Test func sellerProxyFormatsWithDomainsAndOddPasswords() throws {
+        let a = try LinkParser.parse("proxy.example.org:3128:bob:p:a@ss", expecting: .proxy, proxyKind: .http).tunnel
+        #expect(a.server == Endpoint(host: "proxy.example.org", port: 3128))
+        #expect(a.proto == .proxy(Proxy(kind: .http, username: "bob", password: "p:a@ss")))
+        let b = try LinkParser.parse("bob:p:a@ss:proxy.example.org:3128", expecting: .proxy).tunnel
+        #expect(b.server == Endpoint(host: "proxy.example.org", port: 3128))
+        #expect(b.proto == .proxy(Proxy(kind: .socks5, username: "bob", password: "p:a@ss")))
+        // Plain host:port and bad text are left to the usual parser.
+        #expect(try LinkParser.parse("203.0.113.7:1080", expecting: .proxy).tunnel.server.port == 1080)
+        #expect(throws: LinkParser.Failure.self) { try LinkParser.parse("not a proxy at all", expecting: .proxy) }
+    }
+
     @Test func theKindIsEnforcedWhereItIsKnown() throws {
         #expect(throws: LinkParser.Failure.self) { try LinkParser.parse("socks5://h.example.org:1080", expecting: .tunnel) }
         #expect(throws: LinkParser.Failure.self) {

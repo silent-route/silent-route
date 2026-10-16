@@ -57,8 +57,18 @@ public final class AppModel {
     public private(set) var activeProfile: IPC.ProfileRef?
     public private(set) var library = ProfileLibrary()
     public private(set) var speed: Speed?
-    /// Bytes through sing-box since it started: the session.
+    /// Bytes since the uptime's start (`uptimeSince`). sing-box counts from
+    /// its own start, so when counting the whole session, what earlier
+    /// sing-box runs carried is added on (`sessionCarry`).
     public private(set) var sessionBytes: Speed?
+    private var sessionCarry = Speed(down: 0, up: 0)
+    private var sessionKey: Date?
+
+    /// Where the uptime counts from, as chosen in Settings: this connection,
+    /// or the whole session since the VPN was turned on.
+    public var uptimeSince: Date? {
+        Preferences.sessionCounter == .session ? (status.sessionSince ?? status.connectedSince) : status.connectedSince
+    }
     /// The installed helper's build, from its last answer.
     public private(set) var helperVersion: String?
 
@@ -236,12 +246,20 @@ public final class AppModel {
         guard traffic == nil else { return }
         traffic = Task { [weak self] in
             guard let self, let r = try? await self.backend.send(.apiCredentials), let api = r.api else { return }
+            // The same count as the uptime: a new one, or a new sing-box run
+            // of the same session.
+            if self.uptimeSince != self.sessionKey {
+                self.sessionKey = self.uptimeSince
+                self.sessionCarry = Speed(down: 0, up: 0)
+            } else if let s = self.sessionBytes {
+                self.sessionCarry = s
+            }
             // The totals so far once, then each second's bytes added on.
-            var total = Speed(down: 0, up: 0)
+            var total = self.sessionCarry
             if let d = try? await TrafficMonitor.request(api, "GET", "/connections"),
                let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
-                total.down = (obj["downloadTotal"] as? NSNumber)?.int64Value ?? 0
-                total.up = (obj["uploadTotal"] as? NSNumber)?.int64Value ?? 0
+                total.down += (obj["downloadTotal"] as? NSNumber)?.int64Value ?? 0
+                total.up += (obj["uploadTotal"] as? NSNumber)?.int64Value ?? 0
             }
             self.sessionBytes = total
             await TrafficStream.run(port: api.port, secret: api.secret) { [weak self] s in
@@ -263,7 +281,11 @@ public final class AppModel {
         traffic?.cancel()
         traffic = nil
         speed = nil
-        sessionBytes = nil
+        if status.phase == .off {
+            sessionBytes = nil
+            sessionCarry = Speed(down: 0, up: 0)
+            sessionKey = nil
+        }
     }
 
     // MARK: - Helper installation
@@ -363,6 +385,17 @@ public final class AppModel {
         }
         notice = Notice("Imported the profile “\(new.name)”", isError: false)
         return new.id
+    }
+
+    // MARK: - Logs
+
+    /// The kept session logs, newest first; nil if the helper can't say.
+    public func sessionLogs() async -> [LogSession]? {
+        try? await backend.send(.listLogs).logs
+    }
+
+    public func logText(_ id: String) async -> String? {
+        try? await backend.send(.readLog(id)).logText
     }
 
     /// For the Monitor page; nil while not connected.

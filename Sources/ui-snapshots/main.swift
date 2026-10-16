@@ -11,7 +11,29 @@ import VPNIPC
 
 struct FakeBackend: HelperBackend {
     var isInstalled: Bool { true }
-    func send(_ request: IPC.Request) async throws -> IPC.Response { IPC.Response() }
+    func send(_ request: IPC.Request) async throws -> IPC.Response {
+        var r = IPC.Response()
+        let now = Date()
+        switch request {
+        case .listLogs:
+            r.logs = [LogSession(id: "b.log", started: now.addingTimeInterval(-4330), ended: nil, profile: "Home", bytes: 48_213),
+                      LogSession(id: "a.log", started: now.addingTimeInterval(-90_000), ended: now.addingTimeInterval(-81_000),
+                                 profile: "Work", bytes: 3_120)]
+        case .readLog:
+            r.logText = """
+            # Silent Route session · profile: Home
+            2026-10-14 12:03:09 [helper] VPN turned on
+            2026-10-14 12:03:11 [helper] connected
+            +0000 2026-10-14 12:40:02 WARN inbound/tun[tun-in]: link icmp connection from 172.19.0.5 to 192.0.2.1: icmp is not supported
+            2026-10-14 13:10:44 [helper] the Mac woke from sleep
+            +0000 2026-10-14 13:10:45 ERROR connection: open connection to 198.51.100.7:8000 using outbound/socks: i/o timeout
+            2026-10-14 13:10:51 [helper] route “Streaming”: now through “Netherlands”
+            2026-10-14 13:11:20 [helper] route “Streaming”: now through “Backup Proxy”
+            """
+        default: break
+        }
+        return r
+    }
 }
 
 // MARK: Sample data (fictitious servers)
@@ -125,6 +147,7 @@ MainActor.assumeIsolated {
 
     let win = CGSize(width: 1000, height: 700)
     render("window-routes", size: win, MainWindow(model: model(.ready, connected, speed: speed), selection: home.id))
+    render("window-logs", size: win, MainWindow(model: model(.ready, connected, speed: speed), showLogs: true))
     render("window-monitor", size: win, MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
     for section in [ProfileEditor.Section.servers, .dns, .network] {
         render("editor-\(section)", size: CGSize(width: 760, height: 640),

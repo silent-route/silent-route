@@ -7,7 +7,10 @@ public enum VPNPhase: String, Codable, Sendable {
 
 public struct VPNStatus: Codable, Equatable, Sendable {
     public var phase: VPNPhase
+    /// When the current connection came up; a reconnect starts it anew.
     public var connectedSince: Date?
+    /// When the VPN was turned on; reconnects and profile switches keep it.
+    public var sessionSince: Date?
     /// pf is blocking everything that bypasses sing-box.
     public var killSwitchOn: Bool
     public var lastError: String?
@@ -17,13 +20,14 @@ public struct VPNStatus: Codable, Equatable, Sendable {
     /// …and where each route's traffic goes right now.
     public var routes: [RouteState]
 
-    public init(phase: VPNPhase, connectedSince: Date? = nil, killSwitchOn: Bool = false,
+    public init(phase: VPNPhase, connectedSince: Date? = nil, sessionSince: Date? = nil, killSwitchOn: Bool = false,
                 lastError: String? = nil, reconnectAttempts: Int = 0,
                 servers: [ServerState] = [], routes: [RouteState] = []) {
         self.servers = servers
         self.routes = routes
         self.phase = phase
         self.connectedSince = connectedSince
+        self.sessionSince = sessionSince
         self.killSwitchOn = killSwitchOn
         self.lastError = lastError
         self.reconnectAttempts = reconnectAttempts
@@ -57,5 +61,24 @@ public struct RouteState: Codable, Equatable, Sendable, Identifiable {
     public init(id: UUID, via: Via) {
         self.id = id
         self.via = via
+    }
+}
+
+/// One VPN session's log, as the app lists it.
+public struct LogSession: Codable, Equatable, Sendable, Identifiable {
+    /// The file name; also how the app asks for its text.
+    public var id: String
+    public var started: Date
+    /// Nil while the session is still going.
+    public var ended: Date?
+    public var profile: String
+    public var bytes: Int
+
+    public init(id: String, started: Date, ended: Date?, profile: String, bytes: Int) {
+        self.id = id
+        self.started = started
+        self.ended = ended
+        self.profile = profile
+        self.bytes = bytes
     }
 }

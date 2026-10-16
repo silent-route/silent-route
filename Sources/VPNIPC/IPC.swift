@@ -13,7 +13,7 @@ import VPNCore
 public enum IPC {
     /// Bumped on any incompatible change; the app asks to reinstall the
     /// helper on a mismatch.
-    public static let protocolVersion = 4
+    public static let protocolVersion = 5
     public static let machService = "org.silentroute.app.helper"
 
     /// Clients the helper accepts. Each must be signed by the same
@@ -34,6 +34,10 @@ public enum IPC {
         case activateProfile(UUID)
         /// clash API address and secret, for live traffic stats in the app.
         case apiCredentials
+        /// The kept session logs, newest first.
+        case listLogs
+        /// One session's log text (`LogSession.id`).
+        case readLog(String)
     }
 
     public struct Envelope: Codable, Sendable {
@@ -56,6 +60,9 @@ public enum IPC {
         /// The installed helper's build (the app's CFBundleVersion it came
         /// from); the app offers an update when it differs from its own.
         public var helperVersion: String?
+        /// Only for listLogs / readLog.
+        public var logs: [LogSession]?
+        public var logText: String?
 
         public init(error: String? = nil, status: VPNStatus? = nil, activeProfile: ProfileRef? = nil,
                     libraryRevision: Int? = nil, library: ProfileLibrary? = nil, api: APICredentials? = nil,
