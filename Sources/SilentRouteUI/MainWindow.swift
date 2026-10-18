@@ -96,17 +96,12 @@ public struct MainWindow: View {
             Label("Monitor", systemImage: "chart.xyaxis.line").tag(Item.monitor)
             Label("Logs", systemImage: "doc.text").tag(Item.logs)
             Section("Profiles") {
+                let count = model.library.profiles.count
                 ForEach(Array(model.library.profiles.enumerated()), id: \.element.id) { i, p in
                     ProfileRow(profile: p, isActive: p.id == model.library.activeID, status: model.status)
                         .tag(Item.profile(p.id))
-                        // Alternating rows, as in Finder's lists.
-                        .listRowBackground(
-                            RoundedRectangle(cornerRadius: 6)
-                                // Both kinds visible against the sidebar,
-                                // and unlike each other.
-                                .fill(Color.primary.opacity(i % 2 == 1 ? 0.10 : 0.04))
-                                .padding(.horizontal, 10)
-                        )
+                        // One rounded group, like a group in System Settings.
+                        .listRowBackground(GroupedRowBackground(isFirst: i == 0, isLast: i == count - 1))
                         .help(p.id == model.library.activeID ? "Active profile"
                                                              : "Press Return or double-click to make this profile active")
                 }
@@ -229,6 +224,28 @@ public struct MainWindow: View {
         } else if let text = pb.string(forType: .string) {
             Task { if let id = await model.importProfileText(text) { selection = .profile(id) } }
         }
+    }
+}
+
+/// A row's share of a rounded group, as System Settings draws its groups
+/// (General › About, Software Update, Storage): one filled shape with rounded
+/// outer corners, and hairlines between rows that start after the icon.
+struct GroupedRowBackground: View {
+    let isFirst: Bool
+    let isLast: Bool
+    private let radius: CGFloat = 10
+
+    var body: some View {
+        UnevenRoundedRectangle(topLeadingRadius: isFirst ? radius : 0, bottomLeadingRadius: isLast ? radius : 0,
+                               bottomTrailingRadius: isLast ? radius : 0, topTrailingRadius: isFirst ? radius : 0,
+                               style: .continuous)
+            .fill(Color.primary.opacity(0.05))
+            .overlay(alignment: .bottom) {
+                if !isLast {
+                    Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5).padding(.leading, 38)
+                }
+            }
+            .padding(.horizontal, 10)
     }
 }
 

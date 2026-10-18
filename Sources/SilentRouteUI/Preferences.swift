@@ -9,6 +9,8 @@ public enum Preferences {
     public static let checkUpdatesKey = "checkForUpdates"
     public static let notificationsKey = "notifications"
     public static let sessionCounterKey = "sessionCounter"
+    public static let logsInBackupsKey = "logsInBackups"
+    public static let logsIndexedKey = "logsIndexed"
 
     public enum Appearance: String, CaseIterable, Identifiable, Sendable {
         case system, light, dark
@@ -54,6 +56,15 @@ public enum Preferences {
 
     @MainActor public static var sessionCounter: SessionCounter {
         UserDefaults.standard.string(forKey: sessionCounterKey).flatMap(SessionCounter.init) ?? .connection
+    }
+
+    /// Session logs in Time Machine backups, and in Spotlight. Both off by
+    /// default: a log names sites and servers.
+    @MainActor public static var logsInBackups: Bool { UserDefaults.standard.bool(forKey: logsInBackupsKey) }
+    @MainActor public static var logsIndexed: Bool { UserDefaults.standard.bool(forKey: logsIndexedKey) }
+
+    @MainActor public static func applyLogFolderSettings() {
+        LogStore.currentUser.apply(includeInBackups: logsInBackups, indexable: logsIndexed)
     }
 
     @MainActor public static var notifications: Notifications {

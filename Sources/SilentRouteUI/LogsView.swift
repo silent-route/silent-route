@@ -4,10 +4,11 @@ import UniformTypeIdentifiers
 import VPNCore
 
 /// Session logs: the kept sessions on the left, the chosen one on the
-/// right. Read through the helper (the files are root's), only while the
-/// page is open; the running session follows along.
+/// right. Read from this user's own log folder while the page is open; the
+/// running session follows along.
 struct LogsView: View {
     let model: AppModel
+    var store: LogStore = .currentUser
     @State private var sessions: [LogSession] = []
     @State private var selected: LogSession.ID?
     @State private var text = ""
@@ -37,7 +38,7 @@ struct LogsView: View {
         Group {
             if loaded && sessions.isEmpty {
                 ContentUnavailableView("No sessions yet", systemImage: "doc.text",
-                                       description: Text("Each time you turn the VPN on, its session is logged here. The last 30 are kept, and only you can see yours — other users of this Mac see only their own."))
+                                       description: Text("Each time you turn the VPN on, its session is logged here and in ~/Library/Logs/Silent Route. The last 30 are kept, and only you can see yours — other users of this Mac see only their own."))
             } else {
                 List(sessions, selection: $selected) { s in
                     SessionRow(session: s).tag(s.id)
@@ -64,6 +65,13 @@ struct LogsView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 220)
                 Spacer()
+                Button {
+                    let target = selected.flatMap(store.url(of:)) ?? store.folder ?? store.base
+                    NSWorkspace.shared.activateFileViewerSelecting([target])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+                .help("Your logs are files in ~/Library/Logs/Silent Route — only you can open them")
                 Menu {
                     Button("Copy") { copy(redacted: false) }
                     Button("Copy Without Addresses") { copy(redacted: true) }
@@ -112,7 +120,8 @@ struct LogsView: View {
     // MARK: Loading
 
     private func refreshList(selectNewest: Bool) async {
-        if let list = await model.sessionLogs() { sessions = list }
+        let store = self.store
+        sessions = await Task.detached { store.sessions() }.value
         loaded = true
         if selectNewest, selected == nil { selected = sessions.first?.id }
     }
@@ -120,11 +129,12 @@ struct LogsView: View {
     /// Loads the chosen session; while it is still going, keeps it fresh.
     private func follow() async {
         guard let id = selected else { text = ""; return }
-        text = await model.logText(id) ?? ""
+        let store = self.store
+        text = await Task.detached { store.text(of: id) }.value ?? ""
         while !Task.isCancelled, sessions.first(where: { $0.id == id })?.ended == nil {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
-            if let t = await model.logText(id), t != text { text = t }
+            if let t = await Task.detached(operation: { store.text(of: id) }).value, t != text { text = t }
             await refreshList(selectNewest: false)
         }
     }

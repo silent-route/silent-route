@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Only valid while the launch event is being handled.
         launchedAtLogin = Self.launchedAsLoginItem
         Preferences.applyAppearance()
+        Preferences.applyLogFolderSettings()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

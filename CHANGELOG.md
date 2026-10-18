@@ -1,25 +1,31 @@
 # Changelog
 
-## 1.1.0-beta
+## 1.1.2-beta
 
 ### New
 
-- **Session logs.** Each time the VPN is turned on, its session is written to a log: connecting and reconnecting (with the reason), failed attempts, profile switches, routes moving between servers, the Mac waking from sleep, and sing-box's own warnings and errors. Open **Logs** in the sidebar, under Monitor.
-  - The list shows each session with its profile, duration and size; the running one is marked *Live* and updates as you watch.
-  - **Problems** narrows a log to errors, warnings, reconnects and failovers; the filter field searches it.
+- **Session logs.** Each time the VPN is turned on, its session is written to a log: connecting and reconnecting (with the reason), failed attempts, profile switches, routes moving between servers, the Mac waking from sleep, and sing-box's own warnings and errors.
+  - Logs are yours: they are written into the home folder of the macOS user who turned the VPN on, `~/Library/Logs/Silent Route`, readable only by that user. Open them in Finder or Console, or in the app under **Logs** (sidebar, under Monitor). Other accounts on the same Mac see only their own.
+  - The app lists each session with its profile, duration and size; the running one is marked *Live* and updates as you watch. **Problems** narrows a log to errors, warnings, reconnects and failovers; the filter field searches it; **Show in Finder** opens the file.
   - **Share** copies or saves a log, optionally *without addresses*: IP addresses, host names and the names of your profiles, routes and servers are replaced, so a log can be shown to someone safely.
-  - The last 30 sessions are kept. A session belongs to the macOS user who turned the VPN on, and only they can see it; other accounts on the same Mac see only their own.
+  - The last 30 sessions are kept. By default logs stay out of Time Machine backups and Spotlight search; both can be allowed in Settings › Advanced.
 - **Proxies in the formats sellers use.** In Add Server › Proxy, paste `host:port:user:pass`, `user:pass:host:port`, `user:pass@host:port`, `host:port@user:pass`, or the same with `|` or a space between the halves. Passwords containing `:` or `@` work too.
 - **Connection time and traffic** (Settings › General): count them per connection, restarting after a reconnect (the default), or from turning the VPN on until turning it off.
 
 ### Improved
 
 - **Fewer dropped connections on network changes.** A Wi-Fi switch or waking from sleep no longer restarts sing-box at once: the helper checks the servers every 2 seconds and restarts only after 12 seconds without any answer. Short drops pass without breaking calls, downloads or open pages. Routes with a kill switch stay blocked meanwhile, as before.
+- The profiles list is drawn as one rounded group, like the groups in System Settings.
 - Routes can be reordered with the up/down arrows on each route, like the servers inside a route.
 
-### Privacy
+### Privacy and security
 
-- Logs are no longer readable by every account on the Mac. The old shared `sing-box.log` is deleted on update; logs now live in per-user folders that only root can open, and the app reads them through the helper.
+- The old shared `sing-box.log`, readable by every account on the Mac, is gone; it is deleted on update.
+- The helper runs as root but writes logs into a folder the user owns, so it never opens anything there by a path that could have been swapped: every folder on the way is opened without following symbolic links and must belong to the user, and each file is created new.
+
+### Uninstalling
+
+- Uninstalling now asks whether to delete the session logs as well — for every user of the Mac. App cleaners such as AppCleaner remove them too.
 
 ### Updating
 

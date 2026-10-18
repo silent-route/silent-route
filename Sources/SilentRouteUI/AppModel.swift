@@ -331,11 +331,12 @@ public final class AppModel {
 
     /// Removes everything, then moves the app to the Trash and quits.
     /// - Parameter keepProfiles: a copy goes to /Users/Shared first.
-    public func uninstallEverything(keepProfiles: Bool) async {
+    public func uninstallEverything(keepProfiles: Bool, keepLogs: Bool = false) async {
         busy = true
         defer { busy = false }
         var args = ["uninstall", "--yes", "--user", NSUserName()]
         if keepProfiles { args.append("--keep-profiles") }
+        if keepLogs { args.append("--keep-logs") }
         switch await runInstaller(args) {
         case .cancelled:
             return
@@ -385,17 +386,6 @@ public final class AppModel {
         }
         notice = Notice("Imported the profile “\(new.name)”", isError: false)
         return new.id
-    }
-
-    // MARK: - Logs
-
-    /// The kept session logs, newest first; nil if the helper can't say.
-    public func sessionLogs() async -> [LogSession]? {
-        try? await backend.send(.listLogs).logs
-    }
-
-    public func logText(_ id: String) async -> String? {
-        try? await backend.send(.readLog(id)).logText
     }
 
     /// For the Monitor page; nil while not connected.

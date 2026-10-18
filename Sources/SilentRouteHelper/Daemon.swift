@@ -43,11 +43,13 @@ enum Daemon {
             clashAPIPort: freePort(), clashAPISecret: "",
             geoIPCountries: countries, siteLists: siteLists)
 
-        // Logs name sites and servers: root only. The old shared sing-box.log
-        // (readable by every user) goes; sessions keep their own files.
-        let sessionLog = SessionLog(dir: paths.sessionLogs)
+        // Session logs go into the home of whoever turned the VPN on. Earlier
+        // builds kept a shared sing-box.log (readable by every user) and
+        // root's own session folders: both go.
+        let sessionLog = SessionLog(system: paths.logs)
         try? fm.removeItem(at: paths.singBoxLog)
         try? fm.removeItem(at: paths.singBoxLog.appendingPathExtension("1"))
+        try? fm.removeItem(at: paths.logs.appendingPathComponent("sessions"))
         let engine = SingBoxEngine(paths: paths, group: group, trampoline: paths.helper.path,
                                    output: { sessionLog.engineOutput() })
         let controller = Controller(
@@ -248,15 +250,6 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 return await respond(library: true)
             case .activateProfile(let id):
                 try await profiles.activate(id)
-            case .listLogs:
-                var r = await respond()
-                r.logs = sessionLog.sessions(of: uid)
-                return r
-            case .readLog(let id):
-                guard let text = sessionLog.text(of: id, for: uid) else { return await respond(error: "No such log") }
-                var r = await respond()
-                r.logText = text
-                return r
             case .apiCredentials:
                 guard let secret = await controller.currentAPISecret else {
                     return await respond(error: "Not connected")

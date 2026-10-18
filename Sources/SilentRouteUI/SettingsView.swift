@@ -14,6 +14,9 @@ public struct SettingsView: View {
     @AppStorage(Preferences.checkUpdatesKey) private var checkUpdates = true
     @AppStorage(Preferences.notificationsKey) private var notifications = Preferences.Notifications.routes
     @AppStorage(Preferences.sessionCounterKey) private var sessionCounter = Preferences.SessionCounter.connection
+    @AppStorage(Preferences.logsInBackupsKey) private var logsInBackups = false
+    @AppStorage(Preferences.logsIndexedKey) private var logsIndexed = false
+    @State private var deleteLogs = true
     private let updater = Updater.shared
 
     public init(model: AppModel) { self.model = model }
@@ -159,6 +162,15 @@ public struct SettingsView: View {
                     Button("Update Helper…") { Task { await model.installHelper() } }.disabled(model.busy)
                 }
             }
+            Section("Session logs") {
+                Toggle("Include logs in Time Machine backups", isOn: $logsInBackups)
+                    .onChange(of: logsInBackups) { _, _ in Preferences.applyLogFolderSettings() }
+                Toggle("Let Spotlight index logs", isOn: $logsIndexed)
+                    .onChange(of: logsIndexed) { _, _ in Preferences.applyLogFolderSettings() }
+                Text("Logs are kept in ~/Library/Logs/Silent Route, readable only by you. They can name the sites you open and your servers, so by default they are left out of backups and out of Spotlight search.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Section {
                 Button("Uninstall Silent Route…", role: .destructive) { confirmUninstall = true }
                     .foregroundStyle(.red)
@@ -217,15 +229,21 @@ public struct SettingsView: View {
     private var uninstallSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("Uninstall Silent Route?", systemImage: "trash").font(.title3.weight(.semibold))
-            Text("The VPN turns off, all blocking is lifted and the network goes back to normal. The helper, all profiles (exits and rules), logs and settings are deleted, and the app moves to the Trash.")
+            Text("The VPN turns off, all blocking is lifted and the network goes back to normal. The helper, all profiles (servers and routes) and settings are deleted, and the app moves to the Trash.")
                 .fixedSize(horizontal: false, vertical: true)
             Toggle("Keep a copy of the profiles in /Users/Shared/Silent Route profiles", isOn: $keepProfiles)
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Delete session logs", isOn: $deleteLogs)
+                Text("The logs in ~/Library/Logs/Silent Route of every user of this Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.leading, 20)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { confirmUninstall = false }.keyboardShortcut(.cancelAction)
                 Button("Uninstall", role: .destructive) {
                     confirmUninstall = false
-                    Task { await model.uninstallEverything(keepProfiles: keepProfiles) }
+                    Task { await model.uninstallEverything(keepProfiles: keepProfiles, keepLogs: !deleteLogs) }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
