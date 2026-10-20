@@ -13,7 +13,7 @@ public struct MenuBarIcon: View {
     let model: AppModel
     public init(model: AppModel) { self.model = model }
     public var body: some View {
-        Image(systemName: PhaseLook(status: model.status, helper: model.helper).symbol)
+        Image(systemName: PhaseLook(status: model.status, helper: model.helper, otherUser: model.otherUsersVPN).symbol)
             .accessibilityLabel("Silent Route")
     }
 }
@@ -35,7 +35,7 @@ public struct MenuBarView: View {
     }
 
     public var body: some View {
-        let look = PhaseLook(status: model.status, helper: model.helper)
+        let look = PhaseLook(status: model.status, helper: model.helper, otherUser: model.otherUsersVPN)
         VStack(alignment: .leading, spacing: 0) {
             header(look)
                 .padding(.horizontal, 14)
@@ -176,7 +176,8 @@ public struct MenuBarView: View {
 
     private func statusLine(_ look: PhaseLook) -> String {
         var parts = [look.title]
-        if model.helper == .ready, let p = model.activeProfile, model.status.phase != .off || !model.status.killSwitchOn {
+        if model.helper == .ready, !model.otherUsersVPN, let p = model.activeProfile,
+           model.status.phase != .off || !model.status.killSwitchOn {
             parts.append(p.name)
         }
         return parts.joined(separator: " · ")

@@ -19,7 +19,10 @@ struct MonitorView: View {
 
     var body: some View {
         Group {
-            if model.status.phase == .connected || !monitor.connections.isEmpty {
+            if model.otherUsersVPN {
+                ContentUnavailableView("Another user's VPN", systemImage: "person.2",
+                                       description: Text("Another user of this Mac turned the VPN on. Its traffic is shown only to them."))
+            } else if model.status.phase == .connected || !monitor.connections.isEmpty {
                 content
             } else {
                 ContentUnavailableView("Not connected", systemImage: "chart.xyaxis.line",

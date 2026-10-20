@@ -55,6 +55,9 @@ public final class AppModel {
     public private(set) var helper: HelperState = .unknown
     public private(set) var status = VPNStatus(phase: .off)
     public private(set) var activeProfile: IPC.ProfileRef?
+    /// The VPN is on, turned on by another user of this Mac: we see only
+    /// that, may turn it off, and change nothing of what it runs.
+    public private(set) var otherUsersVPN = false
     public private(set) var library = ProfileLibrary()
     public private(set) var speed: Speed?
     /// Bytes since the uptime's start (`uptimeSince`). sing-box counts from
@@ -157,6 +160,7 @@ public final class AppModel {
             status = s
         }
         if let v = r.helperVersion { helperVersion = v }
+        otherUsersVPN = r.otherUsersVPN ?? false
         activeProfile = r.activeProfile
         if let lib = r.library {
             library = lib
@@ -320,7 +324,8 @@ public final class AppModel {
         let updating = helper == .ready
         busy = true
         defer { busy = false }
-        switch await runInstaller(["install"]) {
+        // Who installs: an earlier version's shared profiles become theirs.
+        switch await runInstaller(["install", "--user", NSUserName()]) {
         case .done: notice = Notice(updating ? "Helper updated" : "Helper installed", isError: false)
         case .cancelled: break
         case .failed(let m): notice = Notice("Installation failed: \(m)", isError: true)
@@ -330,7 +335,7 @@ public final class AppModel {
     }
 
     /// Removes everything, then moves the app to the Trash and quits.
-    /// - Parameter keepProfiles: a copy goes to /Users/Shared first.
+    /// - Parameter keepProfiles: each user's profiles are copied to their home first.
     public func uninstallEverything(keepProfiles: Bool, keepLogs: Bool = false) async {
         busy = true
         defer { busy = false }

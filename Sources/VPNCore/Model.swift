@@ -29,6 +29,11 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
     /// Only `.always` still means something (blocking within one boot while
     /// off); otherwise protection follows the routes' kill switches.
     public var killSwitch: KillSwitchMode
+    /// The tunnel interface's MTU; nil lets sing-box choose (9000). Lower it
+    /// (1400, 1280) on networks where large packets get lost.
+    public var mtu: Int?
+
+    public static let mtuRange = 1280...9000
 
     public init(schemaVersion: Int = Profile.currentSchema, id: UUID = UUID(), name: String = "Profile",
                 tunnels: [Tunnel] = [], routes: [Route] = [], defaultRoute: Route? = nil,
@@ -45,7 +50,7 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, id, name, tunnels, routes, defaultRoute, dns, lan, killSwitch
+        case schemaVersion, id, name, tunnels, routes, defaultRoute, dns, lan, killSwitch, mtu
         // schema 1
         case mainTunnel, rules
     }
@@ -60,6 +65,7 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
         dns = try c.decode(DNSSettings.self, forKey: .dns)
         lan = try c.decode(LANPolicy.self, forKey: .lan)
         killSwitch = try c.decode(KillSwitchMode.self, forKey: .killSwitch)
+        mtu = try c.decodeIfPresent(Int.self, forKey: .mtu)
         if schemaVersion >= 2 {
             routes = try c.decode([Route].self, forKey: .routes)
             defaultRoute = try c.decode(Route.self, forKey: .defaultRoute)
@@ -109,6 +115,7 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
         try c.encode(dns, forKey: .dns)
         try c.encode(lan, forKey: .lan)
         try c.encode(killSwitch, forKey: .killSwitch)
+        try c.encodeIfPresent(mtu, forKey: .mtu)
     }
 
     struct LegacyTunnel: Decodable {
@@ -249,6 +256,9 @@ public struct Tunnel: Codable, Hashable, Identifiable, Sendable {
     /// Where it came from. A link is kept verbatim so it can be re-parsed
     /// after the parser learns something new.
     public var origin: Origin
+    /// Several connections inside one, to a server that supports it (off
+    /// when nil). See `Multiplex`.
+    public var multiplex: Multiplex?
 
     public enum Origin: Codable, Hashable, Sendable {
         case link(String)
@@ -261,6 +271,36 @@ public struct Tunnel: Codable, Hashable, Identifiable, Sendable {
         self.server = server
         self.proto = proto
         self.origin = origin
+    }
+}
+
+/// sing-box multiplexing: many connections carried inside a few to the
+/// server, instead of one each. Fewer handshakes, and `padding` blurs the
+/// traffic's shape; but one slow connection can hold up the others, and
+/// the server must have multiplexing enabled too, or nothing connects.
+public struct Multiplex: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, CaseIterable, Sendable {
+        case h2mux, smux, yamux
+    }
+    public var kind: Kind
+    /// Connections to the server at most; streams are spread over them.
+    public var maxConnections: Int
+    public var padding: Bool
+
+    public init(kind: Kind = .h2mux, maxConnections: Int = 4, padding: Bool = false) {
+        self.kind = kind
+        self.maxConnections = maxConnections
+        self.padding = padding
+    }
+
+    /// Hysteria2 is QUIC (multiplexed already); VLESS with XTLS Vision
+    /// cannot be multiplexed; plain proxies do not speak it.
+    public static func isSupported(by proto: TunnelProtocol) -> Bool {
+        switch proto {
+        case .vless(let v): v.flow == nil || v.flow?.isEmpty == true
+        case .trojan, .shadowsocks, .vmess: true
+        case .hysteria2, .proxy: false
+        }
     }
 }
 
@@ -452,15 +492,36 @@ public struct Route: Codable, Hashable, Identifiable, Sendable {
     public var conditions: Conditions
     public var target: Target
     public var killSwitch: Bool
+    /// Split the first packet of TLS connections (where the site's name is
+    /// visible) into pieces. Meant for routes that go direct; through a
+    /// tunnel the traffic is encrypted already.
+    public var fragmentTLS: Bool
 
     public init(id: UUID = UUID(), name: String, enabled: Bool = true, conditions: Conditions = Conditions(),
-                target: Target, killSwitch: Bool = true) {
+                target: Target, killSwitch: Bool = true, fragmentTLS: Bool = false) {
         self.id = id
         self.name = name
         self.enabled = enabled
         self.conditions = conditions
         self.target = target
         self.killSwitch = killSwitch
+        self.fragmentTLS = fragmentTLS
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, enabled, conditions, target, killSwitch, fragmentTLS
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        conditions = try c.decode(Conditions.self, forKey: .conditions)
+        target = try c.decode(Target.self, forKey: .target)
+        killSwitch = try c.decode(Bool.self, forKey: .killSwitch)
+        // Added in 1.1.3: earlier profiles have none.
+        fragmentTLS = try c.decodeIfPresent(Bool.self, forKey: .fragmentTLS) ?? false
     }
 
     public static func everythingElse(servers: [Tunnel.ID]) -> Route {

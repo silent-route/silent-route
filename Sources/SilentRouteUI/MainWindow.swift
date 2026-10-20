@@ -98,7 +98,8 @@ public struct MainWindow: View {
             Section("Profiles") {
                 let count = model.library.profiles.count
                 ForEach(Array(model.library.profiles.enumerated()), id: \.element.id) { i, p in
-                    ProfileRow(profile: p, isActive: p.id == model.library.activeID, status: model.status)
+                    ProfileRow(profile: p, isActive: p.id == model.library.activeID,
+                               status: model.otherUsersVPN ? VPNStatus(phase: .off) : model.status)
                         .tag(Item.profile(p.id))
                         // One rounded group, like a group in System Settings.
                         .listRowBackground(GroupedRowBackground(isFirst: i == 0, isLast: i == count - 1))
@@ -279,13 +280,13 @@ struct ConnectionFooter: View {
     let model: AppModel
 
     var body: some View {
-        let look = PhaseLook(status: model.status, helper: model.helper)
+        let look = PhaseLook(status: model.status, helper: model.helper, otherUser: model.otherUsersVPN)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 StatusDot(color: look.color)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(look.title).font(.callout.weight(.medium)).lineLimit(2)
-                    if let p = model.activeProfile, model.helper == .ready {
+                    if let p = model.activeProfile, model.helper == .ready, !model.otherUsersVPN {
                         Text(p.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }

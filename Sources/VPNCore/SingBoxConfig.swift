@@ -114,6 +114,11 @@ public enum SingBoxConfig {
         // A rule needs a condition: everything enters through the TUN.
         case .block: routeRules.append(["inbound": [.string(tunTag)], "action": "reject"])
         }
+        // `final` takes no options: fragmenting the default route needs a
+        // catch-all rule of its own.
+        if def.fragmentTLS, def.target != .block {
+            routeRules.append(["inbound": [.string(tunTag)], "action": "route", "outbound": .string(final), "tls_fragment": true])
+        }
 
         // Rule-sets actually referenced.
         var ruleSetTags: [String] = []
@@ -153,7 +158,7 @@ public enum SingBoxConfig {
             "inbounds": [[
                 "type": "tun", "tag": .string(tunTag),
                 "address": [.string(tunAddress4), .string(tunAddress6)],
-                "mtu": 9000,
+                "mtu": .int(profile.mtu ?? 9000),
                 "auto_route": true,
                 "stack": "gvisor",
             ]],
@@ -322,6 +327,7 @@ public enum SingBoxConfig {
         case .direct: rule["action"] = "route"; rule["outbound"] = .string(directTag)
         case .block: rule["action"] = "reject"
         }
+        if r.fragmentTLS, r.target != .block { rule["tls_fragment"] = true }
         return .object(rule)
     }
 
@@ -403,6 +409,10 @@ public enum SingBoxConfig {
             o["alter_id"] = .int(v.alterID)
             if let t = v.tls { o["tls"] = tls(t) }
             if let x = transport(v.transport) { o["transport"] = x }
+        }
+        if let m = t.multiplex, Multiplex.isSupported(by: t.proto) {
+            o["multiplex"] = ["enabled": true, "protocol": .string(m.kind.rawValue),
+                              "max_connections": .int(m.maxConnections), "padding": .bool(m.padding)]
         }
         return .object(o)
     }

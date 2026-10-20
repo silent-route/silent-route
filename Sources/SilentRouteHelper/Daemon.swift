@@ -22,14 +22,18 @@ enum Daemon {
         let group = getgrnam(Paths.groupName).map { $0.pointee.gr_gid } ?? 0
         if group == 0 { log.error("group \(Paths.groupName, privacy: .public) is missing; connections will be refused") }
 
-        let libraryStore = LibraryStore(url: paths.library, legacyURL: paths.legacyProfile)
-        let (library, setAside) = libraryStore.loadReporting()
-        if let setAside {
-            fputs("profiles.json could not be read; kept as \(setAside.lastPathComponent), starting with no profiles\n", stderr)
-        }
+        // Profiles are per user. The shared library of earlier versions goes
+        // to the user who installed the update (or, run by hand, to whoever
+        // is at the Mac).
+        try? fm.createDirectory(at: paths.users, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let installer = (try? String(contentsOf: paths.migrateOwner, encoding: .utf8))
+            .flatMap { uid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        let console = (try? fm.attributesOfItem(atPath: "/dev/console")[.ownerAccountID] as? NSNumber)?.uint32Value
+        ProfileManager.migrateShared(from: LibraryStore(url: paths.library, legacyURL: paths.legacyProfile),
+                                     to: paths.users, uid: installer ?? console ?? 0)
+        try? fm.removeItem(at: paths.migrateOwner)
         let version = (try? String(contentsOf: paths.version, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? "dev"
-        let profile = library.active ?? Profile()
         let countries = Set((try? fm.contentsOfDirectory(atPath: paths.rules.path))?.compactMap { name -> String? in
             guard name.hasPrefix("geoip-"), name.hasSuffix(".srs") else { return nil }
             return String(name.dropFirst(6).dropLast(4))
@@ -53,16 +57,18 @@ enum Daemon {
         let engine = SingBoxEngine(paths: paths, group: group, trampoline: paths.helper.path,
                                    output: { sessionLog.engineOutput() })
         let controller = Controller(
-            profile: profile, options: .init(singBoxGroup: group, configEnvironment: env),
+            profile: Profile(), options: .init(singBoxGroup: group, configEnvironment: env),
             pf: SystemPacketFilter(), engine: engine, network: SystemNetwork(),
             store: FileStateStore(url: paths.state), clock: SystemClock())
-        let profiles = ProfileManager(controller: controller, store: libraryStore, library: library)
+        let profiles = ProfileManager(controller: controller, usersDir: paths.users, ownerFile: paths.owner)
         let service = Service(controller: controller, profiles: profiles, apiPort: env.clashAPIPort, version: version,
                               sessionLog: sessionLog)
 
         Task {
             // Before anything can begin a session.
             await controller.setSessionHook { sessionLog.handle($0) }
+            // The VPN runs its owner's profile (it may resume below).
+            if let p = await profiles.ownerProfile() { try? await controller.update(profile: p) }
             await controller.reconcileOnLaunch()
             log.info("helper ready")
         }
@@ -214,12 +220,21 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
 
     /// Every answer carries the state, the active profile and the library
     /// revision, so a client never needs a second round trip to refresh.
-    func respond(error: String? = nil, library: Bool = false, api: IPC.APICredentials? = nil) async -> IPC.Response {
-        let lib = await profiles.library
-        return IPC.Response(error: error, status: await controller.status,
-                            activeProfile: lib.active.map { IPC.ProfileRef(id: $0.id, name: $0.name) },
-                            libraryRevision: await profiles.revision,
-                            library: library ? lib : nil, api: api, helperVersion: version)
+    func respond(_ uid: uid_t, error: String? = nil, library: Bool = false, api: IPC.APICredentials? = nil) async -> IPC.Response {
+        let lib = await profiles.library(of: uid)
+        var status = await controller.status
+        let mine = await profiles.controls(uid)
+        if !mine {
+            // Another user's VPN: that it is on, nothing of what it runs.
+            status = VPNStatus(phase: status.phase, connectedSince: status.connectedSince,
+                               killSwitchOn: status.killSwitchOn, reconnectAttempts: status.reconnectAttempts)
+        }
+        var r = IPC.Response(error: error, status: status,
+                             activeProfile: lib.active.map { IPC.ProfileRef(id: $0.id, name: $0.name) },
+                             libraryRevision: await profiles.revision(of: uid),
+                             library: library ? lib : nil, api: api, helperVersion: version)
+        r.otherUsersVPN = mine ? nil : true
+        return r
     }
 
     func handle(_ data: Data, uid: uid_t) async -> IPC.Response {
@@ -234,31 +249,35 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
             case .status:
                 break
             case .start:
-                sessionLog.setOwner(uid)
-                try await controller.start()
+                // The user turning it on owns it: their active profile runs.
+                let log = sessionLog
+                try await profiles.start(by: uid, beforeStart: { log.setOwner(uid) })
             case .stop:
+                // Anyone at the Mac may turn it off: their traffic goes through it too.
                 await controller.stop()
             case .panic:
                 await controller.panic()
             case .getLibrary:
-                return await respond(library: true)
+                return await respond(uid, library: true)
             case .saveProfile(let p):
-                try await profiles.save(p)
-                return await respond(library: true)
+                try await profiles.save(p, by: uid)
+                return await respond(uid, library: true)
             case .deleteProfile(let id):
-                try await profiles.delete(id)
-                return await respond(library: true)
+                try await profiles.delete(id, by: uid)
+                return await respond(uid, library: true)
             case .activateProfile(let id):
-                try await profiles.activate(id)
+                try await profiles.activate(id, by: uid)
             case .apiCredentials:
-                guard let secret = await controller.currentAPISecret else {
-                    return await respond(error: "Not connected")
+                // Live connections show what the owner is doing: theirs alone.
+                let owner = await profiles.owner
+                guard uid == 0 || owner == uid, let secret = await controller.currentAPISecret else {
+                    return await respond(uid, error: "Not connected")
                 }
-                return await respond(api: .init(port: Int(apiPort), secret: secret))
+                return await respond(uid, api: .init(port: Int(apiPort), secret: secret))
             }
         } catch {
-            return await respond(error: "\(error)")
+            return await respond(uid, error: "\(error)")
         }
-        return await respond()
+        return await respond(uid)
     }
 }

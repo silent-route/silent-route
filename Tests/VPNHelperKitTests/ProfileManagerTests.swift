@@ -11,26 +11,41 @@ import Testing
                             legacyURL: dir.appendingPathComponent("profile.json"))
     }
 
-    /// The harness's profile as "Home" plus a second, valid "Work".
-    static func setUp() async throws -> (Harness, ProfileManager, home: Profile, work: Profile) {
+    static let me: uid_t = 501
+    static let other: uid_t = 502
+
+    static func tempDir() -> URL {
+        let d = FileManager.default.temporaryDirectory.appendingPathComponent("sb-users-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    /// User 501 has "Home" (active) and a second, valid "Work"; 501 turned
+    /// the VPN on as the daemon would (prepareStart, then start).
+    static func setUp(start: Bool = false) async throws -> (Harness, ProfileManager, home: Profile, work: Profile) {
         let h = Harness()
         var home = await h.controller.profile
         home.name = "Home"
-        try await h.controller.update(profile: home)   // as the daemon starts it: from the library
         var work = Profile.example(name: "Work", tunnels: [Harness.h2b])
         work.killSwitch = .whileConnected
+        let dir = tempDir()
         let lib = ProfileLibrary(profiles: [home, work], activeID: home.id)
-        let m = ProfileManager(controller: h.controller, store: tempStore(), library: lib)
+        ProfileManager.store(in: dir.appendingPathComponent("users"), for: me).save(lib)
+        let m = ProfileManager(controller: h.controller, usersDir: dir.appendingPathComponent("users"),
+                               ownerFile: dir.appendingPathComponent("owner"))
+        if start {
+            try await m.prepareStart(by: me)
+            try await h.controller.start()
+        }
         return (h, m, home, work)
     }
 
     @Test func activatingWhileConnectedSwitchesUnderTheKillSwitch() async throws {
-        let (h, m, _, work) = try await Self.setUp()
-        try await h.controller.start()
-        try await m.activate(work.id)
+        let (h, m, _, work) = try await Self.setUp(start: true)
+        try await m.activate(work.id, by: Self.me)
         #expect(await h.wait(for: .connected))
         #expect(await h.controller.profile.id == work.id)
-        #expect(await m.library.activeID == work.id)
+        #expect(await m.library(of: Self.me).activeID == work.id)
         let log = await h.world.log
         // Never unblocked during the swap.
         #expect(!log.contains("pf.release") && !log.contains("pf.flush"))
@@ -38,49 +53,118 @@ import Testing
     }
 
     @Test func theProfileInUseCannotBeDeleted() async throws {
-        let (h, m, home, work) = try await Self.setUp()
-        try await h.controller.start()
-        await #expect(throws: ProfileManager.Failure.self) { try await m.delete(home.id) }
-        try await m.delete(work.id)
-        #expect(await m.library.profiles.map(\.id) == [home.id])
+        let (h, m, home, work) = try await Self.setUp(start: true)
+        await #expect(throws: ProfileManager.Failure.self) { try await m.delete(home.id, by: Self.me) }
+        try await m.delete(work.id, by: Self.me)
+        #expect(await m.library(of: Self.me).profiles.map(\.id) == [home.id])
         await h.controller.stop()
-        try await m.delete(home.id)
-        #expect(await m.library.profiles.isEmpty)
-        #expect(await m.library.activeID == nil)
+        try await m.delete(home.id, by: Self.me)
+        #expect(await m.library(of: Self.me).profiles.isEmpty)
+        #expect(await m.library(of: Self.me).activeID == nil)
     }
 
     @Test func anInvalidEditOfTheRunningProfileIsRefusedAndNothingChanges() async throws {
-        let (h, m, home, _) = try await Self.setUp()
-        try await h.controller.start()
+        let (h, m, home, _) = try await Self.setUp(start: true)
         var bad = home
         bad.routes.append(Route(name: "empty", conditions: Conditions(), target: .direct))
-        await #expect(throws: ProfileManager.Failure.self) { try await m.save(bad) }
-        #expect(await m.library.profile(home.id) == home)
+        await #expect(throws: ProfileManager.Failure.self) { try await m.save(bad, by: Self.me) }
+        #expect(await m.library(of: Self.me).profile(home.id) == home)
         #expect(await h.controller.profile == home)
         // While off the same draft is kept: it is being edited.
         await h.controller.stop()
-        try await m.save(bad)
-        #expect(await m.library.profile(home.id) == bad)
+        try await m.save(bad, by: Self.me)
+        #expect(await m.library(of: Self.me).profile(home.id) == bad)
     }
 
     @Test func editsOfOtherProfilesDoNotTouchTheConnection() async throws {
-        let (h, m, _, work) = try await Self.setUp()
-        try await h.controller.start()
+        let (h, m, _, work) = try await Self.setUp(start: true)
         var w = work
         w.name = "Office"
-        try await m.save(w)
+        try await m.save(w, by: Self.me)
         #expect(await h.world.log.filter { $0.hasPrefix("engine.launch") }.count == 1)
-        #expect(await m.library.profile(work.id)?.name == "Office")
+        #expect(await m.library(of: Self.me).profile(work.id)?.name == "Office")
     }
 
     @Test func concurrentEditsAreNotLost() async throws {
         let (_, m, _, _) = try await Self.setUp()
         await withTaskGroup(of: Void.self) { g in
             for i in 0..<20 {
-                g.addTask { try? await m.save(Profile(name: "P\(i)")) }
+                g.addTask { try? await m.save(Profile(name: "P\(i)"), by: Self.me) }
             }
         }
-        #expect(await m.library.profiles.count == 22)
+        #expect(await m.library(of: Self.me).profiles.count == 22)
+    }
+
+    // MARK: Each user's own
+
+    /// A user sees and changes only their own library; nothing they do
+    /// touches the VPN another user turned on.
+    @Test func librariesArePerUser() async throws {
+        let (h, m, home, _) = try await Self.setUp(start: true)
+        #expect(await m.library(of: Self.other).profiles.isEmpty, "the other user sees none of these")
+        let theirs = Profile.example(name: "Theirs", tunnels: [Harness.h2])
+        try await m.save(theirs, by: Self.other)
+        try await m.activate(theirs.id, by: Self.other)
+        #expect(await m.library(of: Self.me).profile(theirs.id) == nil)
+        #expect(await h.controller.profile.id == home.id, "the running VPN is untouched")
+        #expect(await h.world.log.filter { $0.hasPrefix("engine.launch") }.count == 1)
+        #expect(!(await m.controls(Self.other)))
+        #expect(await m.controls(Self.me))
+        #expect(await m.controls(0), "root sees everything")
+        // Once it is off, the other user may turn it on with their own profile.
+        await h.controller.stop()
+        #expect(await m.controls(Self.other))
+        try await m.prepareStart(by: Self.other)
+        #expect(await h.controller.profile.id == theirs.id)
+        #expect(await m.owner == Self.other)
+    }
+
+    /// Two users turning it on at the same moment: one wins, with their own
+    /// profile, and is the owner.
+    @Test func simultaneousStartsDoNotMixUsers() async throws {
+        let (h, m, home, _) = try await Self.setUp()
+        let theirs = Profile.example(name: "Theirs", tunnels: [Harness.h2])
+        try await m.save(theirs, by: Self.other)
+        try await m.activate(theirs.id, by: Self.other)
+        async let a: Void? = try? m.start(by: Self.me)
+        async let b: Void? = try? m.start(by: Self.other)
+        _ = await (a, b)
+        #expect(await h.wait(for: .connected))
+        let owner = try #require(await m.owner)
+        #expect(await h.controller.profile.id == (owner == Self.me ? home.id : theirs.id))
+    }
+
+    @Test func theOwnerIsRememberedAcrossRestarts() async throws {
+        let (h, m, home, _) = try await Self.setUp(start: true)
+        #expect(await m.owner == Self.me)
+        // A new helper process reads the same files.
+        let again = ProfileManager(controller: h.controller, usersDir: m.usersDir, ownerFile: m.ownerFile)
+        #expect(await again.owner == Self.me)
+        #expect(await again.ownerProfile()?.id == home.id)
+    }
+
+    @Test func librariesAreStoredPrivately() async throws {
+        let (_, m, _, _) = try await Self.setUp()
+        try await m.save(Profile(name: "X"), by: Self.other)
+        let url = ProfileManager.store(in: m.usersDir, for: Self.other).url
+        let fm = FileManager.default
+        #expect(try fm.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int == 0o600)
+        #expect(try fm.attributesOfItem(atPath: url.deletingLastPathComponent().path)[.posixPermissions] as? Int == 0o700)
+    }
+
+    /// The shared library of an earlier version goes to one user only.
+    @Test func theSharedLibraryMovesToOneUser() throws {
+        let dir = Self.tempDir()
+        let shared = LibraryStore(url: dir.appendingPathComponent("profiles.json"))
+        var lib = ProfileLibrary()
+        try lib.upsert(Profile(name: "Old"))
+        shared.save(lib)
+        let users = dir.appendingPathComponent("users")
+        ProfileManager.migrateShared(from: shared, to: users, uid: Self.me)
+        #expect(ProfileManager.store(in: users, for: Self.me).load().profiles.map(\.name) == ["Old"])
+        #expect(!FileManager.default.fileExists(atPath: shared.url.path), "no shared copy is left")
+        #expect(!FileManager.default.fileExists(atPath: shared.url.appendingPathExtension("prev").path))
+        #expect(ProfileManager.store(in: users, for: Self.other).load().profiles.isEmpty)
     }
 
     @Test func savedAndReloaded() async throws {

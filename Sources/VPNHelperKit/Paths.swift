@@ -22,7 +22,16 @@ public struct Paths: Sendable {
     public var cache: URL { run.appendingPathComponent("cache.db") }
     /// Before profiles: the one profile. Migrated into `library` on start.
     public var legacyProfile: URL { root.appendingPathComponent("profile.json") }
+    /// Before profiles were per user: the one shared library. Migrated into
+    /// `users` on start.
     public var library: URL { root.appendingPathComponent("profiles.json") }
+    /// Each user's own library: `users/<uid>/profiles.json` (root only).
+    public var users: URL { root.appendingPathComponent("users") }
+    /// The uid of the user whose profile the VPN runs.
+    public var owner: URL { root.appendingPathComponent("owner") }
+    /// Written by the installer: the user who updated, who gets the shared
+    /// library of an earlier version.
+    public var migrateOwner: URL { root.appendingPathComponent("migrate-owner") }
     public var state: URL { root.appendingPathComponent("state.json") }
     public var logs: URL { URL(fileURLWithPath: "/Library/Logs/Silent Route") }
     public var singBoxLog: URL { logs.appendingPathComponent("sing-box.log") }

@@ -58,6 +58,11 @@ struct ServerDraft: Equatable {
     var proxyType: ProxyType = .socks5
     var username = ""
 
+    var muxOn = false
+    var muxKind: Multiplex.Kind = .h2mux
+    var muxConnections = 4
+    var muxPadding = false
+
     /// Kept from the server being edited.
     var id = UUID()
     /// The link the fields came from, kept as the origin if nothing changed.
@@ -73,6 +78,12 @@ struct ServerDraft: Equatable {
         port = String(t.server.port)
         if case .link(let l) = t.origin { sourceLink = l }
         sourceTunnel = t
+        if let m = t.multiplex {
+            muxOn = true
+            muxKind = m.kind
+            muxConnections = m.maxConnections
+            muxPadding = m.padding
+        }
         func takeTLS(_ tls: TLS?) {
             guard let tls else { security = .none; return }
             security = tls.reality != nil ? .reality : .tls
@@ -131,6 +142,17 @@ struct ServerDraft: Equatable {
     }
 
     /// Which protocol fields apply.
+    /// Multiplexing applies: not Hysteria2 (QUIC), not VLESS with XTLS
+    /// Vision, not plain proxies.
+    var supportsMux: Bool {
+        guard kind == .tunnel else { return false }
+        switch proto {
+        case .trojan, .shadowsocks, .vmess: return true
+        case .vless: return flow.isEmpty
+        case .hysteria2: return false
+        }
+    }
+
     var usesTLSChoice: Bool { kind == .tunnel && [.vless, .trojan, .vmess].contains(proto) }
     var usesTransport: Bool { kind == .tunnel && [.vless, .trojan, .vmess].contains(proto) }
     var tlsOn: Bool {
@@ -203,6 +225,9 @@ struct ServerDraft: Equatable {
         }
         var t = Tunnel(id: id, name: trimmedName.isEmpty ? "\(h):\(p)" : trimmedName, server: Endpoint(host: h, port: p),
                        proto: protocolValue, origin: .manual)
+        if muxOn, supportsMux {
+            t.multiplex = Multiplex(kind: muxKind, maxConnections: muxConnections, padding: muxPadding)
+        }
         // Still exactly what the link said: keep the link as its origin.
         if let link = sourceLink, let src = sourceTunnel, src.server == t.server, src.proto == t.proto {
             t.origin = .link(link)

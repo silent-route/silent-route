@@ -321,6 +321,18 @@ struct RouteEditor: View {
         })
     }
 
+    /// Splits the start of TLS connections (where the site's name is seen)
+    /// into pieces, so that filtering on that name misses it. For traffic
+    /// that goes direct; through a tunnel it is encrypted anyway.
+    private var fragmentToggle: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Toggle("Fragment TLS handshakes", isOn: $route.fragmentTLS)
+            Text("Splits the first packet of secure connections, where the site's name is visible, into pieces. Useful for traffic that goes direct; through a server it is encrypted already. Some sites may connect a little slower.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(isDefault ? "Everything Else" : (isNew ? "New Route" : "Edit Route"))
@@ -340,6 +352,7 @@ struct RouteEditor: View {
                         .labelsHidden()
                         .frame(maxWidth: 380)
                         if case .servers = route.target { serverList }
+                        if route.target != .block { fragmentToggle.padding(.top, 4) }
                     }
 
                     if !isDefault {
@@ -387,7 +400,7 @@ struct RouteEditor: View {
             }
             .padding(16)
         }
-        .frame(width: 580, height: isDefault ? 440 : 700)
+        .frame(width: 580, height: isDefault ? 500 : 740)
     }
 
     // MARK: Server list

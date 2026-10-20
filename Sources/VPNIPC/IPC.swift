@@ -13,7 +13,7 @@ import VPNCore
 public enum IPC {
     /// Bumped on any incompatible change; the app asks to reinstall the
     /// helper on a mismatch.
-    public static let protocolVersion = 6
+    public static let protocolVersion = 7
     public static let machService = "org.silentroute.app.helper"
 
     /// Clients the helper accepts. Each must be signed by the same
@@ -56,6 +56,9 @@ public enum IPC {
         /// The installed helper's build (the app's CFBundleVersion it came
         /// from); the app offers an update when it differs from its own.
         public var helperVersion: String?
+        /// The VPN is on, turned on by another user of this Mac: the status
+        /// says only that, and only they can change what it runs.
+        public var otherUsersVPN: Bool?
 
         public init(error: String? = nil, status: VPNStatus? = nil, activeProfile: ProfileRef? = nil,
                     libraryRevision: Int? = nil, library: ProfileLibrary? = nil, api: APICredentials? = nil,

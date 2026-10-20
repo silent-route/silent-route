@@ -115,7 +115,14 @@ remove_stale_daemons() {
 # ── install / update ────────────────────────────────────────────────────────
 
 do_install() {
-  local contents arch sb version stage
+  local contents arch sb version stage user="" uid
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --user) user=${2:-}; shift ;;
+      *) echo "unknown option $1" >&2; exit 2 ;;
+    esac
+    shift
+  done
   contents=$(cd "$HERE/.." && pwd)
   case "$(uname -m)" in
     arm64) arch=arm64 ;;
@@ -149,10 +156,19 @@ do_install() {
   chmod 0644 "$stage/VERSION"
 
   # 2. Keep a copy of the profiles (the last ten installs).
+  #    Profiles are per user (users/<uid>/); an earlier version kept one
+  #    shared profiles.json, which goes to the user installing this update.
   if [ -f "$ROOT/profiles.json" ]; then
     cp -p "$ROOT/profiles.json" "$ROOT/backups/profiles-$(date +%Y%m%d-%H%M%S).json"
-    ls -1t "$ROOT/backups"/profiles-*.json 2>/dev/null | tail -n +11 | while read -r f; do rm -f "$f"; done
+    if [ -n "$user" ] && uid=$(id -u "$user" 2>/dev/null); then
+      echo "$uid" > "$ROOT/migrate-owner"
+      chmod 0600 "$ROOT/migrate-owner"
+    fi
   fi
+  if [ -d "$ROOT/users" ]; then
+    cp -Rp "$ROOT/users" "$ROOT/backups/users-$(date +%Y%m%d-%H%M%S)"
+  fi
+  ls -1dt "$ROOT/backups"/profiles-*.json "$ROOT/backups"/users-* 2>/dev/null | tail -n +11 | while read -r f; do rm -rf "$f"; done
 
   # 3. Swap: stop the old helper, keep its binaries as bin.prev.
   stop_helper
@@ -238,7 +254,7 @@ do_uninstall() {
   if [ "$yes" = 0 ]; then
     echo "This removes Silent Route completely: the helper, all profiles (tunnels,"
     echo "proxies, rules), logs and settings. The network goes back to normal."
-    [ "$keep" = 1 ] && echo "(a copy of the profiles is kept in /Users/Shared/Silent Route profiles)"
+    [ "$keep" = 1 ] && echo "(each user's profiles are copied to their home: ~/Silent Route profiles.json)"
     read -r -p "Type 'yes' to continue: " answer
     [ "$answer" = yes ] || { echo "cancelled"; exit 1; }
     if [ "$keeplogs" = 0 ]; then
@@ -261,12 +277,23 @@ do_uninstall() {
   # 3. Files.
   rm -f "$PLIST"
   [ "$(readlink /usr/local/bin/sroute 2>/dev/null)" = "$ROOT/bin/sroute" ] && rm -f /usr/local/bin/sroute
-  if [ "$keep" = 1 ] && [ -f "$ROOT/profiles.json" ]; then
-    local keepdir="/Users/Shared/Silent Route profiles"
-    install -d -m 0700 "$keepdir"
-    cp -p "$ROOT/profiles.json" "$keepdir/profiles-$(date +%Y%m%d-%H%M%S).json"
-    [ -n "$user" ] && chown -R "$user" "$keepdir"
-    note "profiles saved to $keepdir"
+  # Each user's profiles to their own home, readable only by them (they
+  # hold server passwords). Written as that user, not as root: whatever is
+  # at that path, the write cannot reach anything the user could not.
+  if [ "$keep" = 1 ] && [ -d "$ROOT/users" ]; then
+    local d u h dest
+    for d in "$ROOT/users"/*/; do
+      u=$(basename "$d")
+      [ -f "$d/profiles.json" ] || continue
+      h=$(dscl . -search /Users UniqueID "$u" 2>/dev/null | awk 'NR==1 {print $1}')
+      [ -n "$h" ] && h=$(dscl . -read "/Users/$h" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+      [ -n "$h" ] && [ -d "$h" ] && [ ! -L "$h" ] || continue
+      dest="$h/Silent Route profiles.json"
+      [ -e "$dest" ] || [ -L "$dest" ] && dest="$h/Silent Route profiles $(date +%Y%m%d-%H%M%S).json"
+      [ -e "$dest" ] || [ -L "$dest" ] && continue
+      sudo -u "#$u" /bin/sh -c 'umask 077; set -C; cat > "$1"' _ "$dest" < "$d/profiles.json" \
+        && note "profiles of user $u saved to $dest"
+    done
   fi
   rm -rf "$ROOT" "$LOGS"
   if [ "$keeplogs" = 0 ]; then remove_user_logs; else note "session logs kept in each user's ~/Library/Logs/Silent Route"; fi
@@ -293,7 +320,7 @@ do_uninstall() {
 }
 
 case "${1:-}" in
-  install) do_install ;;
+  install) shift; do_install "$@" ;;
   uninstall) shift; do_uninstall "$@" ;;
   *) echo "usage: $0 install | uninstall [--yes] [--user NAME] [--keep-profiles] [--keep-logs]" >&2; exit 2 ;;
 esac

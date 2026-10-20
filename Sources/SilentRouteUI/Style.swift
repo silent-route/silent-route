@@ -18,6 +18,8 @@ extension View {
 struct PhaseLook {
     let status: VPNStatus
     let helper: AppModel.HelperState
+    /// Turned on by another user of this Mac.
+    var otherUser = false
 
     var symbol: String {
         guard helper == .ready else { return "globe.badge.chevron.backward" }
@@ -55,6 +57,7 @@ struct PhaseLook {
         case .unknown: return "…"
         case .ready: break
         }
+        if otherUser, status.phase != .off { return "On — another user's VPN" }
         switch status.phase {
         case .connected: return "Connected"
         case .connecting: return "Connecting…"
@@ -68,6 +71,9 @@ struct PhaseLook {
     var detail: String? {
         if case .broken(let why) = helper { return why }
         guard helper == .ready else { return nil }
+        if otherUser, status.phase != .off {
+            return "Another user of this Mac turned it on. You can turn it off; only they can change what it runs."
+        }
         switch status.phase {
         case .reconnecting:
             var s = "Traffic is blocked until the tunnel is back"

@@ -55,9 +55,21 @@ public enum Validation {
             error("profile schema \(profile.schemaVersion) is not \(Profile.currentSchema)")
         }
 
+        if let mtu = profile.mtu, !Profile.mtuRange.contains(mtu) {
+            error("MTU \(mtu) is outside \(Profile.mtuRange.lowerBound)–\(Profile.mtuRange.upperBound)")
+        }
+
         var ids: Set<UUID> = []
         for t in profile.tunnels {
             if !ids.insert(t.id).inserted { error("two servers share the id \(t.id)", tunnel: t.id) }
+            if let m = t.multiplex {
+                if !Multiplex.isSupported(by: t.proto) {
+                    error("server \"\(t.name)\": \(t.proto.displayName) cannot be multiplexed", tunnel: t.id)
+                }
+                if !(1...16).contains(m.maxConnections) {
+                    error("server \"\(t.name)\": multiplexing needs 1–16 connections", tunnel: t.id)
+                }
+            }
             if t.name.trimmingCharacters(in: .whitespaces).isEmpty { error("a server has no name", tunnel: t.id) }
             let host = t.server.host
             if IPNetwork.parseV4(host) == nil, IPNetwork.parseV6(host) == nil, !isValidDomain(host) {

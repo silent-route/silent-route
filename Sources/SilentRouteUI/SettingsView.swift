@@ -231,7 +231,7 @@ public struct SettingsView: View {
             Label("Uninstall Silent Route?", systemImage: "trash").font(.title3.weight(.semibold))
             Text("The VPN turns off, all blocking is lifted and the network goes back to normal. The helper, all profiles (servers and routes) and settings are deleted, and the app moves to the Trash.")
                 .fixedSize(horizontal: false, vertical: true)
-            Toggle("Keep a copy of the profiles in /Users/Shared/Silent Route profiles", isOn: $keepProfiles)
+            Toggle("Keep a copy of each user's profiles in their home folder", isOn: $keepProfiles)
             VStack(alignment: .leading, spacing: 2) {
                 Toggle("Delete session logs", isOn: $deleteLogs)
                 Text("The logs in ~/Library/Logs/Silent Route of every user of this Mac.")

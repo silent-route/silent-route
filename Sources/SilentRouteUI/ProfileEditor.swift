@@ -25,7 +25,7 @@ struct ProfileEditor: View {
     private var isActive: Bool { saved.id == model.library.activeID }
     private var issues: [Validation.Issue] { Validation.check(draft) }
     /// Live state belongs to the profile that is running.
-    private var running: Bool { isActive && model.status.phase == .connected }
+    private var running: Bool { isActive && model.status.phase == .connected && !model.otherUsersVPN }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -232,6 +232,18 @@ struct NetworkSection: View {
                 }
                 .pickerStyle(.radioGroup)
                 .labelsHidden()
+            }
+            Card(title: "Tunnel MTU",
+                 subtitle: "The largest packet sent through the tunnel at once. Automatic suits almost every network; if sites load halfway and hang (a phone hotspot, some hotel or provider networks), try 1400 or 1280.") {
+                Picker("", selection: $profile.mtu) {
+                    Text("Automatic").tag(Int?.none)
+                    ForEach([1500, 1420, 1400, 1280], id: \.self) { Text(String($0)).tag(Int?.some($0)) }
+                    if let m = profile.mtu, ![1500, 1420, 1400, 1280].contains(m) {
+                        Text("Custom: \(String(m))").tag(Int?.some(m))
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
             }
             Card(title: "Protection while reconnecting",
                  subtitle: "The kill switch is set per route, in Routes. While the VPN itself restarts (a few seconds after a crash or a network change), everything outside the tunnel is blocked if any route through servers has its kill switch on.") {

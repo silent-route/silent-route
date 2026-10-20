@@ -43,6 +43,8 @@ public struct LibraryStore: Sendable {
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let d = try? enc.encode(lib) else { return }
         let fm = FileManager.default
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                attributes: [.posixPermissions: 0o700])
         // The previous version stays next to it: one bad save is recoverable.
         let prev = url.appendingPathExtension("prev")
         if fm.fileExists(atPath: url.path) {
@@ -56,8 +58,14 @@ public struct LibraryStore: Sendable {
     }
 }
 
-/// Owns the library and keeps the controller's profile in step with the
-/// active one. Every change is saved before it returns.
+/// Every user's own profile library, and whose profile the VPN runs.
+///
+/// Profiles hold server passwords: each macOS user has their own library
+/// (`users/<uid>/profiles.json`, root only), and a request sees and changes
+/// only the library of the user who sent it. The VPN itself is one for the
+/// whole Mac; its owner is the user who turned it on, and only the owner's
+/// requests touch the running configuration. Every change is saved before
+/// it returns.
 public actor ProfileManager {
     public struct Failure: Error, Sendable, CustomStringConvertible {
         public var description: String
@@ -65,63 +73,155 @@ public actor ProfileManager {
     }
 
     let controller: Controller
-    let store: LibraryStore
-    public private(set) var library: ProfileLibrary
-    /// Bumped on every change, so clients polling status know to refetch.
-    public private(set) var revision = 0
+    nonisolated let usersDir: URL
+    nonisolated let ownerFile: URL
+    private var libraries: [uid_t: ProfileLibrary] = [:]
+    private var revisions: [uid_t: Int] = [:]
+    /// The user whose profile the VPN runs; remembered across helper
+    /// restarts. Nil before anyone turned it on.
+    public private(set) var owner: uid_t?
+    /// A start is under way: a second one, from anyone, waits its turn.
+    private var starting = false
 
-    public init(controller: Controller, store: LibraryStore, library: ProfileLibrary) {
+    public init(controller: Controller, usersDir: URL, ownerFile: URL) {
         self.controller = controller
-        self.store = store
-        self.library = library
+        self.usersDir = usersDir
+        self.ownerFile = ownerFile
+        owner = (try? String(contentsOf: ownerFile, encoding: .utf8))
+            .flatMap { uid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    public static func store(in usersDir: URL, for uid: uid_t) -> LibraryStore {
+        LibraryStore(url: usersDir.appendingPathComponent(String(uid)).appendingPathComponent("profiles.json"))
+    }
+
+    /// One user's library (loaded on first use).
+    public func library(of uid: uid_t) -> ProfileLibrary {
+        if let lib = libraries[uid] { return lib }
+        let (lib, setAside) = Self.store(in: usersDir, for: uid).loadReporting()
+        if let setAside {
+            fputs("profiles of user \(uid) could not be read; kept as \(setAside.lastPathComponent)\n", stderr)
+        }
+        libraries[uid] = lib
+        return lib
+    }
+
+    /// Bumped on every change of a user's library, so their clients refetch.
+    public func revision(of uid: uid_t) -> Int { revisions[uid, default: 0] }
+
+    /// The profile the VPN should run now: the owner's active one.
+    public func ownerProfile() -> Profile? {
+        owner.flatMap { library(of: $0).active }
+    }
+
+    /// Whether this user's requests may see and steer the running VPN: its
+    /// owner, root, or anyone while it is off.
+    public func controls(_ uid: uid_t) async -> Bool {
+        if uid == 0 || owner == uid { return true }
+        return await controller.status.phase == .off
+    }
+
+    /// Whether a change to this user's active profile must reach the
+    /// running VPN.
+    private func drives(_ uid: uid_t) async -> Bool {
+        guard owner == uid else { return false }
+        return await controller.status.phase != .off
+    }
+
+    private func setOwner(_ uid: uid_t) {
+        owner = uid
+        try? FileManager.default.createDirectory(at: ownerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data(String(uid).utf8).write(to: ownerFile)
     }
 
     /// Changes are re-applied to the library as it is after the controller
     /// call: actor methods interleave at `await`, and a change made by a
     /// concurrent request in the meantime must not be lost.
-    private func commit(_ change: (inout ProfileLibrary) throws(ProfileLibrary.Failure) -> Void) {
-        var lib = library
+    private func commit(_ uid: uid_t, _ change: (inout ProfileLibrary) throws(ProfileLibrary.Failure) -> Void) {
+        var lib = library(of: uid)
         do { try change(&lib) } catch { return }
-        library = lib
-        revision += 1
+        libraries[uid] = lib
+        revisions[uid, default: 0] += 1
+        let store = Self.store(in: usersDir, for: uid)
+        try? FileManager.default.createDirectory(at: store.url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
         store.save(lib)
     }
 
-    /// Create or edit. Editing the active profile while connected applies it
-    /// at once (sing-box restarts behind the kill switch); an invalid edit is
-    /// refused then and nothing changes.
-    public func save(_ p: Profile) async throws(Failure) {
-        var lib = library
-        do { try lib.upsert(p) } catch { throw Failure(error.description) }
-        if lib.activeID == p.id, let saved = lib.active {
-            do { try await controller.update(profile: saved) } catch { throw Failure(error.description) }
-        }
-        commit { lib throws(ProfileLibrary.Failure) in try lib.upsert(p) }
+    /// Turns the VPN on with this user's active profile, making them its
+    /// owner. One start at a time: two users starting at the same moment
+    /// cannot end up with one's profile and the other's ownership.
+    public func start(by uid: uid_t, beforeStart: @Sendable () -> Void = {}) async throws(Failure) {
+        guard !starting else { throw Failure("The VPN is being turned on") }
+        starting = true
+        defer { starting = false }
+        guard await controller.status.phase == .off else { throw Failure("The VPN is already on") }
+        try await prepareStart(by: uid)
+        beforeStart()
+        do { try await controller.start() } catch { throw Failure(error.description) }
     }
 
-    public func delete(_ id: Profile.ID) async throws(Failure) {
-        var lib = library
-        let wasActive = lib.activeID == id
-        if wasActive, await controller.status.phase != .off {
+    /// Before this user turns the VPN on: their active profile becomes the
+    /// one it runs, and they its owner.
+    public func prepareStart(by uid: uid_t) async throws(Failure) {
+        guard let p = library(of: uid).active else { throw Failure("No active profile — create one first") }
+        do { try await controller.update(profile: p) } catch { throw Failure(error.description) }
+        setOwner(uid)
+    }
+
+    /// Create or edit. Editing the owner's active profile while connected
+    /// applies it at once (sing-box restarts behind the kill switch); an
+    /// invalid edit is refused then and nothing changes.
+    public func save(_ p: Profile, by uid: uid_t) async throws(Failure) {
+        var lib = library(of: uid)
+        do { try lib.upsert(p) } catch { throw Failure(error.description) }
+        let live = await drives(uid)
+        if live, lib.activeID == p.id, let saved = lib.active {
+            do { try await controller.update(profile: saved) } catch { throw Failure(error.description) }
+        }
+        commit(uid) { lib throws(ProfileLibrary.Failure) in try lib.upsert(p) }
+    }
+
+    public func delete(_ id: Profile.ID, by uid: uid_t) async throws(Failure) {
+        var lib = library(of: uid)
+        let live = await drives(uid)
+        if live, lib.activeID == id {
             throw Failure("This profile is in use. Disconnect or switch to another profile first.")
         }
         do { try lib.remove(id) } catch { throw Failure(error.description) }
-        if wasActive {
-            do { try await controller.update(profile: lib.active ?? Profile()) } catch { throw Failure(error.description) }
-        }
+        let wasActive = library(of: uid).activeID == id
         let next = lib.activeID
-        commit { lib throws(ProfileLibrary.Failure) in
+        commit(uid) { lib throws(ProfileLibrary.Failure) in
             try lib.remove(id)
             if wasActive { lib.activeID = next }
         }
     }
 
-    /// Make another profile active. Connected: switches over right away,
-    /// traffic blocked during the swap.
-    public func activate(_ id: Profile.ID) async throws(Failure) {
-        guard let p = library.profile(id) else { throw Failure("No such profile") }
-        guard library.activeID != id else { return }
-        do { try await controller.update(profile: p) } catch { throw Failure(error.description) }
-        commit { lib in lib.activeID = id }
+    /// Make another profile active. The owner, connected: switches over
+    /// right away, traffic blocked during the swap.
+    public func activate(_ id: Profile.ID, by uid: uid_t) async throws(Failure) {
+        let lib = library(of: uid)
+        guard let p = lib.profile(id) else { throw Failure("No such profile") }
+        guard lib.activeID != id else { return }
+        if await drives(uid) {
+            do { try await controller.update(profile: p) } catch { throw Failure(error.description) }
+        }
+        commit(uid) { lib in lib.activeID = id }
+    }
+
+    /// The library of helpers before profiles were per user: it goes to
+    /// `uid` (the user who updated), unless they already have one.
+    public static func migrateShared(from shared: LibraryStore, to usersDir: URL, uid: uid_t) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: shared.url.path) || shared.legacyURL.map({ fm.fileExists(atPath: $0.path) }) == true else { return }
+        let target = store(in: usersDir, for: uid)
+        try? fm.createDirectory(at: target.url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                attributes: [.posixPermissions: 0o700])
+        if !fm.fileExists(atPath: target.url.path) {
+            target.save(shared.load())
+        }
+        for u in [shared.url, shared.url.appendingPathExtension("prev")] + (shared.legacyURL.map { [$0] } ?? []) {
+            try? fm.removeItem(at: u)
+        }
     }
 }

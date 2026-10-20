@@ -67,6 +67,7 @@ struct AddServerSheet: View {
                     TextField("Port", text: $draft.port, prompt: Text(defaultPortHint))
                 }
                 if draft.kind == .proxy { proxyFields } else { tunnelFields }
+                if draft.supportsMux { multiplexSection }
             }
             .formStyle(.grouped)
 
@@ -187,6 +188,25 @@ struct AddServerSheet: View {
             }
             tlsSection(choice: true)
             transportSection
+        }
+    }
+
+    /// Advanced, off by default: only for servers set up for it.
+    private var multiplexSection: some View {
+        Section {
+            Toggle("Multiplexing (MUX)", isOn: $draft.muxOn)
+            if draft.muxOn {
+                Picker("Protocol", selection: $draft.muxKind) {
+                    ForEach(Multiplex.Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                Stepper("Connections: \(draft.muxConnections)", value: $draft.muxConnections, in: 1...16)
+                Toggle("Padding", isOn: $draft.muxPadding)
+            }
+        } header: {
+            Text("Advanced")
+        } footer: {
+            Text("Carries many connections inside a few to the server: fewer handshakes, and padding blurs the shape of the traffic. The server must have multiplexing enabled with the same protocol, or nothing connects. One slow connection can hold up the others.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

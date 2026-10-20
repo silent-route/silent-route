@@ -95,7 +95,9 @@ func send(_ r: IPC.Request) async -> IPC.Response {
 
 func printStatus(_ r: IPC.Response) {
     guard let s = r.status else { return }
-    let profile = r.activeProfile.map { " — profile “\($0.name)”" } ?? ""
+    let other = r.otherUsersVPN == true
+    let profile = other ? " — another user's VPN (you can turn it off; only they can change it)"
+                        : r.activeProfile.map { " — profile “\($0.name)”" } ?? ""
     switch s.phase {
     case .connected:
         print("● Connected\(profile)")

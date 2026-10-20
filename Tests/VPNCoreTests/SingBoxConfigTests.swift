@@ -69,6 +69,32 @@ enum Fixtures {
         #expect(set("geosite-netflix")?["url"]?.stringValue == "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-netflix.srs")
     }
 
+    @Test func advancedOptionsAreChecked() {
+        var p = Fixtures.profile
+        p.mtu = 576
+        p.tunnels[0].multiplex = Multiplex()          // hysteria2: QUIC, no multiplexing
+        p.tunnels[1].multiplex = Multiplex()          // VLESS with XTLS Vision
+        let errors = Validation.check(p).filter { $0.severity == .error }.map(\.message)
+        #expect(errors.contains { $0.contains("MTU 576") })
+        #expect(errors.filter { $0.contains("cannot be multiplexed") }.count == 2)
+        // Nothing of it reaches sing-box when it is off.
+        let plain = try? SingBoxConfig.generate(Fixtures.profile, env: Fixtures.env).text
+        #expect(plain?.contains("multiplex") == false && plain?.contains("tls_fragment") == false)
+    }
+
+    /// Profiles and .srprofile files from before these options still open.
+    @Test func olderProfilesStillDecode() throws {
+        let enc = JSONEncoder()
+        var json = try JSONSerialization.jsonObject(with: enc.encode(Fixtures.profile)) as! [String: Any]
+        json["mtu"] = nil
+        var routes = json["routes"] as! [[String: Any]]
+        for i in routes.indices { routes[i]["fragmentTLS"] = nil }
+        json["routes"] = routes
+        let p = try JSONDecoder().decode(Profile.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(p.mtu == nil)
+        #expect(p.routes.allSatisfy { !$0.fragmentTLS })
+    }
+
     @Test func geoNamesAreCheckedForForm() {
         var p = Fixtures.profile
         p.routes[0].conditions.destinations = [.geoIP("deu"), .geoSite("bad name")]

@@ -42,6 +42,35 @@ struct SingBoxCheckTests {
         try SingBox.check(SingBoxConfig.generate(Profile.example(tunnels: tunnels), env: SingBox.env))
     }
 
+    /// MTU, multiplexing and TLS fragmentation as sing-box 1.13 expects them.
+    @Test func advancedOptionsAreAccepted() throws {
+        let uuid = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let tls = TLS(serverName: "s.example.org")
+        var tunnels = [
+            Tunnel(name: "trojan", server: Endpoint(host: "s.example.org", port: 443), proto: .trojan(Trojan(password: "p", tls: tls, transport: .tcp))),
+            Tunnel(name: "vless", server: Endpoint(host: "198.51.100.2", port: 443), proto: .vless(VLESS(uuid: uuid, tls: tls))),
+            Tunnel(name: "ss", server: Endpoint(host: "198.51.100.3", port: 8388), proto: .shadowsocks(Shadowsocks(method: "aes-256-gcm", password: "p"))),
+            Tunnel(name: "vmess", server: Endpoint(host: "198.51.100.4", port: 443), proto: .vmess(VMess(uuid: uuid, security: "auto", tls: tls, transport: .tcp))),
+        ]
+        for (i, kind) in Multiplex.Kind.allCases.enumerated() {
+            tunnels[i].multiplex = Multiplex(kind: kind, maxConnections: 2 + i, padding: i % 2 == 0)
+        }
+        tunnels[3].multiplex = Multiplex()
+        var p = Profile.example(tunnels: tunnels)
+        p.mtu = 1400
+        p.routes[0].fragmentTLS = true                                   // direct
+        p.routes.append(Route(name: "via trojan", conditions: Conditions(destinations: [.domainSuffix("c.example")]),
+                              target: .servers([tunnels[0].id]), fragmentTLS: true))
+        p.defaultRoute.target = .servers(tunnels.map(\.id))
+        p.defaultRoute.fragmentTLS = true
+        #expect(Validation.check(p).filter { $0.severity == .error }.isEmpty)
+        let json = try SingBoxConfig.generate(p, env: SingBox.env)
+        #expect(json.text.contains("\"mtu\" : 1400"))
+        #expect(json.text.contains("\"tls_fragment\" : true"))
+        #expect(json.text.contains("\"multiplex\""))
+        try SingBox.check(json)
+    }
+
     /// Random profiles: any combination the model allows must be a config
     /// sing-box accepts.
     @Test func randomProfilesAreAccepted() throws {

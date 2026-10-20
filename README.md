@@ -17,6 +17,11 @@ Runs on Intel and Apple Silicon Macs, macOS 14 Sonoma through macOS 27 Golden Ga
 - Each route has its own kill switch setting: when none of its servers respond, its traffic is either blocked or sent direct.
 - Profiles can be switched from the menu bar while connected. If either profile uses a kill switch, traffic stays blocked until the new configuration is up.
 - Profiles are exported and imported as `.srprofile` files (JSON). Note that they contain server credentials.
+- Profiles belong to each macOS user: on a shared Mac every account has its own profiles, and nobody sees another's servers or passwords. The VPN itself is one for the whole Mac; while someone else's is on, you see only that it is on, and may turn it off.
+- Advanced options, off by default, where they belong:
+  - **Tunnel MTU** (profile › Network): the largest packet sent through the tunnel at once. Automatic suits almost every network; 1400 or 1280 helps where pages load halfway and hang.
+  - **Multiplexing** (server › Advanced): many connections carried inside a few to the server — fewer handshakes, optional padding that blurs the traffic's shape. The server must have it enabled with the same protocol (h2mux, smux or yamux). Not for Hysteria2 (QUIC already multiplexes) or VLESS with XTLS Vision.
+  - **TLS fragmentation** (route): splits the first packet of secure connections, where the site's name is visible, into pieces. Meant for routes that go direct.
 - The Monitor page shows throughput, per-app traffic and the list of open connections with the route and server used by each.
 - macOS notifications when a route fails over, falls back to direct, gets blocked or recovers. Optionally also when the VPN connects, disconnects or loses the connection.
 - Session logs: each time the VPN is turned on, its session (connects, reconnects and why, failovers, sing-box warnings and errors) is logged into the home folder of the macOS user who turned it on: `~/Library/Logs/Silent Route`, readable only by that user, so it opens in Finder or Console. The last 30 sessions are kept. The app shows them under Logs, with a filter for problems and a way to copy or save a log with addresses and names removed. By default logs are left out of Time Machine backups and Spotlight search; both can be allowed in Settings › Advanced.
@@ -62,7 +67,7 @@ Emergency Restore (menu bar or ⇧⌘⌫) stops the VPN, removes the pf rules an
 
 <p align="center"><img src="docs/images/design.svg" alt="Silent Route design: the app talks to the root helper over XPC; the helper runs sing-box and the pf kill switch"></p>
 
-- The helper owns all state. The app sends typed requests over XPC; the helper builds the sing-box configuration and pf rules itself and never accepts a raw config. XPC clients must be signed with the same certificate as the helper.
+- The helper owns all state. The app sends typed requests over XPC; the helper builds the sing-box configuration and pf rules itself and never accepts a raw config. XPC clients must be signed with the same certificate as the helper. macOS tells the helper which user each request comes from: profiles are kept per user (`/Library/Application Support/Silent Route/users/<uid>/`, root only), and a request sees only its own user's.
 - Session logs are written by the helper (root) into a folder the user owns, so it never opens anything there by a path the user could swap: each folder on the way is opened without following symbolic links and must belong to the user, the file is always created new, and writes go through the descriptors opened then. The files belong to the user, mode 0600.
 - The helper copies its binaries and sing-box into root-owned directories and checks sing-box's SHA-256 against `singbox.pin` before each launch.
 - Kill switch: sing-box runs with the `_silentroute` group as its effective gid, and the pf anchor `com.apple/silentroute` only passes traffic from that group on physical interfaces (plus loopback, DHCP and, optionally, the LAN). pf therefore needs no knowledge of routing: anything not sent by sing-box is dropped. Silent Route does not modify the main pf ruleset or other anchors.
