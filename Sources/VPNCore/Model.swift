@@ -213,11 +213,31 @@ public struct DNSSettings: Codable, Hashable, Sendable {
     /// Domain suffixes always resolved through `directServer`, in addition to
     /// the domains of rules that send traffic directly.
     public var directSuffixes: [String]
+    /// Names only the local network knows (a NAS, a printer, the router's
+    /// own page) are asked of the router's DNS — these zones only, and only
+    /// while the local network is reachable directly. Everything else goes
+    /// through Silent Route.
+    public var localZones: [String]
 
-    public init(directServer: IPNetwork, tunnelServer: IPNetwork, directSuffixes: [String]) {
+    public static let defaultLocalZones = ["lan", "home.arpa", "internal"]
+
+    public init(directServer: IPNetwork, tunnelServer: IPNetwork, directSuffixes: [String],
+                localZones: [String] = DNSSettings.defaultLocalZones) {
         self.directServer = directServer
         self.tunnelServer = tunnelServer
         self.directSuffixes = directSuffixes
+        self.localZones = localZones
+    }
+
+    enum CodingKeys: String, CodingKey { case directServer, tunnelServer, directSuffixes, localZones }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        directServer = try c.decode(IPNetwork.self, forKey: .directServer)
+        tunnelServer = try c.decode(IPNetwork.self, forKey: .tunnelServer)
+        directSuffixes = try c.decode([String].self, forKey: .directSuffixes)
+        // Added in 1.1.4: earlier profiles get the defaults.
+        localZones = try c.decodeIfPresent([String].self, forKey: .localZones) ?? DNSSettings.defaultLocalZones
     }
 
     /// Neutral: nothing country-specific is built in. Names follow the

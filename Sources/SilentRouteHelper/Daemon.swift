@@ -4,6 +4,7 @@ import os
 import VPNCore
 import VPNHelperKit
 import VPNIPC
+import VPNRuntime
 
 let log = Logger(subsystem: IPC.helperIdentifier, category: "helper")
 
@@ -54,15 +55,17 @@ enum Daemon {
         try? fm.removeItem(at: paths.singBoxLog)
         try? fm.removeItem(at: paths.singBoxLog.appendingPathExtension("1"))
         try? fm.removeItem(at: paths.logs.appendingPathComponent("sessions"))
+        var options = Controller.Options(singBoxGroup: group, configEnvironment: env)
+        options.captivePort = freePort()
         let engine = SingBoxEngine(paths: paths, group: group, trampoline: paths.helper.path,
                                    output: { sessionLog.engineOutput() })
         let controller = Controller(
-            profile: Profile(), options: .init(singBoxGroup: group, configEnvironment: env),
+            profile: Profile(), options: options,
             pf: SystemPacketFilter(), engine: engine, network: SystemNetwork(),
             store: FileStateStore(url: paths.state), clock: SystemClock())
         let profiles = ProfileManager(controller: controller, usersDir: paths.users, ownerFile: paths.owner)
         let service = Service(controller: controller, profiles: profiles, apiPort: env.clashAPIPort, version: version,
-                              sessionLog: sessionLog)
+                              sessionLog: sessionLog, engine: engine, paths: paths, group: group)
 
         Task {
             // Before anything can begin a session.
@@ -199,9 +202,16 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     let apiPort: UInt16
     let version: String
     let sessionLog: SessionLog
+    let engine: SingBoxEngine
+    let paths: Paths
+    let group: UInt32
 
-    init(controller: Controller, profiles: ProfileManager, apiPort: UInt16, version: String, sessionLog: SessionLog) {
+    init(controller: Controller, profiles: ProfileManager, apiPort: UInt16, version: String, sessionLog: SessionLog,
+         engine: SingBoxEngine, paths: Paths, group: UInt32) {
         self.sessionLog = sessionLog
+        self.engine = engine
+        self.paths = paths
+        self.group = group
         self.controller = controller
         self.profiles = profiles
         self.apiPort = apiPort
@@ -267,6 +277,26 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 return await respond(uid, library: true)
             case .activateProfile(let id):
                 try await profiles.activate(id, by: uid)
+            case .probe(let t):
+                // Checked like the VPN reaches it: sing-box with the kill
+                // switch's group, bound to the physical interface.
+                let errors = Validation.check(Profile(name: "check", tunnels: [t])).filter { $0.severity == .error && $0.tunnel == t.id }
+                guard errors.isEmpty else { return await respond(uid, error: errors.map(\.message).joined(separator: "; ")) }
+                let binary = try engine.verifiedBinary()
+                let report = try await Probe.run(t, singBox: binary, socksPort: Daemon.freePort(),
+                                                 launcher: [paths.helper.path, "exec-engine", String(group)], direct: true)
+                var r = await respond(uid)
+                r.probe = report
+                return r
+            case .captiveLogin:
+                // A way past the kill switch for one window: the owner's alone.
+                let owner = await profiles.owner
+                guard uid == 0 || owner == uid, let p = await controller.currentCaptiveProxy else {
+                    return await respond(uid, error: "No Wi-Fi login is pending")
+                }
+                var r = await respond(uid)
+                r.captiveProxy = p
+                return r
             case .apiCredentials:
                 // Live connections show what the owner is doing: theirs alone.
                 let owner = await profiles.owner

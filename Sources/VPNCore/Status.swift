@@ -19,10 +19,14 @@ public struct VPNStatus: Codable, Equatable, Sendable {
     public var servers: [ServerState]
     /// …and where each route's traffic goes right now.
     public var routes: [RouteState]
+    /// Reconnecting on a Wi-Fi that wants a login (a hotel, a café): the
+    /// owner's app offers its login page; everything else stays blocked.
+    public var captivePortal: Bool
 
     public init(phase: VPNPhase, connectedSince: Date? = nil, sessionSince: Date? = nil, killSwitchOn: Bool = false,
                 lastError: String? = nil, reconnectAttempts: Int = 0,
-                servers: [ServerState] = [], routes: [RouteState] = []) {
+                servers: [ServerState] = [], routes: [RouteState] = [], captivePortal: Bool = false) {
+        self.captivePortal = captivePortal
         self.servers = servers
         self.routes = routes
         self.phase = phase

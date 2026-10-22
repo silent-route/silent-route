@@ -29,20 +29,32 @@ public enum Probe {
         }
     }
 
+    /// - Parameters:
+    ///   - launcher: a command to start sing-box through (the helper's
+    ///     trampoline, which gives it the kill switch's group); empty: run it
+    ///     directly.
+    ///   - direct: bind to the physical interface, past the VPN's tunnel.
     public static func run(_ tunnel: Tunnel, singBox: String, socksPort: UInt16 = 11099,
-                           timeout: TimeInterval = 20) async throws -> Report {
+                           timeout: TimeInterval = 20, launcher: [String] = [], direct: Bool = false) async throws -> Report {
+        // The port is open on localhost while the check runs: a fresh
+        // password keeps everything else on the Mac off it.
+        let user = "probe"
+        let password = (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined()
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("silentroute-probe-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: dir) }
         let config = dir.appendingPathComponent("probe.json")
         // The config carries the tunnel password: owner-only.
-        FileManager.default.createFile(atPath: config.path, contents: SingBoxConfig.probe(tunnel, socksPort: socksPort).encoded(),
+        FileManager.default.createFile(atPath: config.path,
+                                       contents: SingBoxConfig.probe(tunnel, socksPort: socksPort, auth: (user, password),
+                                                                     direct: direct).encoded(),
                                        attributes: [.posixPermissions: 0o600])
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: singBox)
-        process.arguments = ["run", "-c", config.path]
+        let argv = launcher + [singBox, "run", "-c", config.path]
+        process.executableURL = URL(fileURLWithPath: argv[0])
+        process.arguments = Array(argv.dropFirst())
         process.currentDirectoryURL = dir
         let log = Pipe()
         process.standardOutput = log
@@ -69,6 +81,8 @@ public enum Probe {
         cfg.connectionProxyDictionary = [
             kCFStreamPropertySOCKSProxyHost as String: "127.0.0.1",
             kCFStreamPropertySOCKSProxyPort as String: Int(socksPort),
+            kCFStreamPropertySOCKSUser as String: user,
+            kCFStreamPropertySOCKSPassword as String: password,
         ]
         cfg.timeoutIntervalForRequest = timeout
         cfg.timeoutIntervalForResource = timeout

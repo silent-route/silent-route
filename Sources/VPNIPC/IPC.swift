@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import VPNCore
+import VPNRuntime
 
 // The app and the CLI talk to the root helper over XPC. One method carrying a
 // Codable request keeps the Objective-C surface tiny; everything typed lives
@@ -13,7 +14,7 @@ import VPNCore
 public enum IPC {
     /// Bumped on any incompatible change; the app asks to reinstall the
     /// helper on a mismatch.
-    public static let protocolVersion = 7
+    public static let protocolVersion = 9
     public static let machService = "org.silentroute.app.helper"
 
     /// Clients the helper accepts. Each must be signed by the same
@@ -34,6 +35,11 @@ public enum IPC {
         case activateProfile(UUID)
         /// clash API address and secret, for live traffic stats in the app.
         case apiCredentials
+        /// The Wi-Fi login proxy while a network wants a login.
+        case captiveLogin
+        /// Check a server the way the VPN reaches it: directly, past the
+        /// tunnel and the kill switch (the helper runs the check).
+        case probe(Tunnel)
     }
 
     public struct Envelope: Codable, Sendable {
@@ -59,6 +65,10 @@ public enum IPC {
         /// The VPN is on, turned on by another user of this Mac: the status
         /// says only that, and only they can change what it runs.
         public var otherUsersVPN: Bool?
+        /// Only for captiveLogin.
+        public var captiveProxy: SingBoxConfig.LocalProxy?
+        /// Only for probe.
+        public var probe: Probe.Report?
 
         public init(error: String? = nil, status: VPNStatus? = nil, activeProfile: ProfileRef? = nil,
                     libraryRevision: Int? = nil, library: ProfileLibrary? = nil, api: APICredentials? = nil,

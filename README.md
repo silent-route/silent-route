@@ -24,8 +24,11 @@ Runs on Intel and Apple Silicon Macs, macOS 14 Sonoma through macOS 27 Golden Ga
   - **TLS fragmentation** (route): splits the first packet of secure connections, where the site's name is visible, into pieces. Meant for routes that go direct.
 - The Monitor page shows throughput, per-app traffic and the list of open connections with the route and server used by each.
 - macOS notifications when a route fails over, falls back to direct, gets blocked or recovers. Optionally also when the VPN connects, disconnects or loses the connection.
+- Settings › General › Transparency: *Standard* or *More* see-through glass panels.
 - Session logs: each time the VPN is turned on, its session (connects, reconnects and why, failovers, sing-box warnings and errors) is logged into the home folder of the macOS user who turned it on: `~/Library/Logs/Silent Route`, readable only by that user, so it opens in Finder or Console. The last 30 sessions are kept. The app shows them under Logs, with a filter for problems and a way to copy or save a log with addresses and names removed. By default logs are left out of Time Machine backups and Spotlight search; both can be allowed in Settings › Advanced.
 - Short network drops (a Wi-Fi switch, waking from sleep) don't restart sing-box: the helper checks the servers every 2 seconds and restarts only after 12 seconds without an answer, so calls and downloads often survive the drop. Traffic stays blocked meanwhile where the kill switch is on.
+- No DNS leaks through the router: while the VPN is on, macOS's resolver points into the tunnel and sing-box answers by your profile's rules; the kill switch lets only sing-box ask the router. Local names (`nas.lan`, zones you choose) still go to the router. Nothing is changed in your saved network settings.
+- Hotel and café Wi-Fi: when a network wants a login, the VPN stays on behind its kill switch and offers **Open Login Page** — a small window whose traffic alone goes out directly. After you log in, the VPN carries on through the same server, with the same address.
 - The VPN is never started automatically, including after a reboot. Quitting the app turns the VPN off by default; this can be changed in Settings. Connection time and traffic are counted per connection by default, or across reconnects from the moment the VPN was turned on.
 
 ### A word of caution about server lists
@@ -78,16 +81,7 @@ Design notes and test results are in [docs/decisions.md](docs/decisions.md).
 
 ### Network access
 
-Apart from the traffic you route, the following requests are made:
-
-| Source | Destination | When |
-|---|---|---|
-| helper (via each server in use) | `www.gstatic.com/generate_204` | every 10 s while connected |
-| sing-box | `raw.githubusercontent.com` (SagerNet rule-sets) | first use of a list, then weekly |
-| app (via the server being checked) | `ipinfo.io` | when you press Check on a server |
-| app | `api.github.com` (this repository's releases) | daily, can be disabled |
-
-There is no telemetry.
+Every connection Silent Route makes or lets through — by whom, where to, by which path and when, how DNS is resolved, what the kill switch lets out, and how a hotel or café Wi-Fi login works — is described in **[docs/network.md](docs/network.md)**. In short: apart from the traffic you route, only server health checks, address-list downloads, the Wi-Fi login check and update checks go out; there is no telemetry.
 
 ## Command line
 

@@ -324,6 +324,9 @@ struct ConnectionFooter: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .lineLimit(4)
             }
+            if model.captivePending {
+                CaptiveBanner(model: model)
+            }
             if model.helperOutdated {
                 Button("Update Helper…") { Task { await model.installHelper() } }
                     .controlSize(.small)

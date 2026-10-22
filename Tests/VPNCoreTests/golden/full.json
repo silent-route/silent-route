@@ -6,6 +6,15 @@
       {
         "action" : "route",
         "domain_suffix" : [
+          "lan",
+          "home.arpa",
+          "internal"
+        ],
+        "server" : "dns-local"
+      },
+      {
+        "action" : "route",
+        "domain_suffix" : [
           "cn",
           "xn--fiqs8s"
         ],
@@ -42,6 +51,10 @@
         "server" : "223.5.5.5",
         "tag" : "dns-direct",
         "type" : "udp"
+      },
+      {
+        "tag" : "dns-local",
+        "type" : "dhcp"
       },
       {
         "detour" : "r-00000000-0000-0000-0000-0000000000d0",

@@ -2,7 +2,40 @@ import Foundation
 import VPNCore
 
 public struct SystemNetwork: NetworkInspector {
-    public init() {}
+    let dns: SystemDNS
+
+    public init(dnsBackup: URL = URL(fileURLWithPath: "/Library/Application Support/Silent Route/run/dns-backup.plist")) {
+        dns = SystemDNS(backupURL: dnsBackup)
+    }
+
+    public func overrideDNS(server: String) async {
+        if dns.apply(server: server) { await Self.flushDNSCache() }
+    }
+
+    public func restoreDNS() async {
+        dns.restore()
+        await Self.flushDNSCache()
+    }
+
+    static func flushDNSCache() async {
+        await Command.run("/usr/bin/dscacheutil", ["-flushcache"])
+        await Command.run("/usr/bin/killall", ["-HUP", "mDNSResponder"])
+    }
+
+    /// Apple's own check, as macOS does it: a network that wants a login
+    /// answers it with its login page instead of "Success". Asked through
+    /// the login-page proxy, so it goes out directly even while everything
+    /// else is blocked. No answer at all is not a login page.
+    public func captivePortal(via proxy: SingBoxConfig.LocalProxy) async -> Bool {
+        let r = await Command.run("/usr/bin/curl", [
+            "-s", "-m", "6", "-o", "-", "-w", "\n%{http_code}",
+            "-x", "socks5h://127.0.0.1:\(proxy.port)", "-U", "\(proxy.username):\(proxy.password)",
+            "http://captive.apple.com/hotspot-detect.html",
+        ])
+        let lines = r.text.split(separator: "\n")
+        guard let code = lines.last.flatMap({ Int($0) }), code != 0 else { return false }
+        return !(code == 200 && r.text.contains("Success"))
+    }
 
     /// The interface carrying sing-box's TUN address.
     public func tunInterface() async -> String? {

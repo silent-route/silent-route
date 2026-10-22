@@ -15,6 +15,7 @@ public struct SettingsView: View {
     @AppStorage(Preferences.notificationsKey) private var notifications = Preferences.Notifications.routes
     @AppStorage(Preferences.sessionCounterKey) private var sessionCounter = Preferences.SessionCounter.connection
     @AppStorage(Preferences.logsInBackupsKey) private var logsInBackups = false
+    @AppStorage(Preferences.transparencyKey) private var transparency = Preferences.Transparency.standard
     @AppStorage(Preferences.logsIndexedKey) private var logsIndexed = false
     @State private var deleteLogs = true
     private let updater = Updater.shared
@@ -84,6 +85,14 @@ public struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: appearance) { _, a in Preferences.applyAppearance(a) }
+                Picker("Transparency", selection: $transparency) {
+                    Text("Standard").tag(Preferences.Transparency.standard)
+                    Text("More").tag(Preferences.Transparency.more)
+                }
+                .pickerStyle(.segmented)
+                Text("How see-through the glass panels are. “More” can make text harder to read on a busy background. If everything looks opaque, check System Settings › Accessibility › Display › Reduce transparency.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section {
                 Toggle("Open at login", isOn: $launchAtLogin)

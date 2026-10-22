@@ -1,5 +1,6 @@
 import SwiftUI
 import VPNCore
+import VPNRuntime
 
 /// Edits one profile as a draft; nothing reaches the helper until Save.
 struct ProfileEditor: View {
@@ -22,6 +23,14 @@ struct ProfileEditor: View {
     }
 
     private var dirty: Bool { draft != saved }
+
+    /// Server checks through the helper, which reaches servers the way the
+    /// VPN does (directly); nil without a helper.
+    private var helperCheck: (@Sendable (Tunnel) async throws -> Probe.Report)? {
+        guard model.helper == .ready else { return nil }
+        let model = self.model
+        return { t in try await model.probe(t) }
+    }
     private var isActive: Bool { saved.id == model.library.activeID }
     private var issues: [Validation.Issue] { Validation.check(draft) }
     /// Live state belongs to the profile that is running.
@@ -46,7 +55,7 @@ struct ProfileEditor: View {
                     switch section {
                     case .routes: RoutesSection(profile: $draft, liveServers: running ? model.status.servers : [],
                                                 liveRoutes: running ? model.status.routes : [])
-                    case .servers: ServersSection(profile: $draft, live: running ? model.status.servers : [])
+                    case .servers: ServersSection(check: helperCheck, profile: $draft, live: running ? model.status.servers : [])
                     case .dns: DNSSection(dns: $draft.dns)
                     case .network: NetworkSection(profile: $draft)
                     }
@@ -169,6 +178,7 @@ struct DNSSection: View {
     @State private var direct = ""
     @State private var tunnel = ""
     @State private var suffixes = ""
+    @State private var zones = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -188,6 +198,15 @@ struct DNSSection: View {
                     Text("Enter an IP address, e.g. 1.1.1.1").font(.caption).foregroundStyle(.red)
                 }
             }
+            Card(title: "Local names via the router",
+                 subtitle: "While the VPN is on, every other name goes through Silent Route — the router is never asked. Names in these zones only the local network knows (a NAS, a printer, the router's own page), so they are asked of the router. One zone per line; empty: none. Applies while the local network is reachable directly (Network tab).") {
+                TextEditor(text: $zones)
+                    .font(.body.monospaced())
+                    .frame(minHeight: 70)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .background(.background.opacity(0.6), in: .rect(cornerRadius: 8))
+            }
             Card(title: "Always resolved directly", subtitle: "Domain zones, one per line: cn, lan, home.arpa…") {
                 TextEditor(text: $suffixes)
                     .font(.body.monospaced())
@@ -202,12 +221,14 @@ struct DNSSection: View {
         .onChange(of: direct) { apply() }
         .onChange(of: tunnel) { apply() }
         .onChange(of: suffixes) { apply() }
+        .onChange(of: zones) { apply() }
     }
 
     private func load() {
         direct = dns.directServer.description.replacingOccurrences(of: "/32", with: "")
         tunnel = dns.tunnelServer.description.replacingOccurrences(of: "/32", with: "")
         suffixes = dns.directSuffixes.joined(separator: "\n")
+        zones = dns.localZones.joined(separator: "\n")
     }
 
     private func apply() {
@@ -215,6 +236,8 @@ struct DNSSection: View {
         if let t = IPNetwork(tunnel) { dns.tunnelServer = t }
         let list = suffixes.split(whereSeparator: \.isNewline).map { Validation.normalizeDomain(String($0)) }.filter { !$0.isEmpty }
         if list != dns.directSuffixes { dns.directSuffixes = list }
+        let local = zones.split(whereSeparator: \.isNewline).map { Validation.normalizeDomain(String($0)) }.filter { !$0.isEmpty }
+        if local != dns.localZones { dns.localZones = local }
     }
 }
 

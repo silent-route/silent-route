@@ -12,6 +12,11 @@ final class RouteNotifier {
     private var asked = false
 
     func update(from old: VPNStatus, to new: VPNStatus, profile: Profile?) {
+        // Always, whatever the notification setting: nothing gets through
+        // until the user acts.
+        if new.captivePortal, !old.captivePortal {
+            post("This Wi-Fi needs a login", "Everything stays blocked meanwhile. Open Silent Route to log in.")
+        }
         if Preferences.notifications == .all, old.phase != new.phase {
             connection(from: old, to: new, profile: profile)
         }

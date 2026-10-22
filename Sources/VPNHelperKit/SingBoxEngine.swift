@@ -42,6 +42,12 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
 
     /// Before every use: the binary must be exactly the pinned build, and
     /// owned by root so nobody can swap it between this check and exec.
+    /// The pinned sing-box, checked: for one-off runs (a server check).
+    public func verifiedBinary() throws -> String {
+        try verifyBinary()
+        return paths.singBox.path
+    }
+
     func verifyBinary() throws {
         let path = paths.singBox.path
         let attrs = try FileManager.default.attributesOfItem(atPath: path)

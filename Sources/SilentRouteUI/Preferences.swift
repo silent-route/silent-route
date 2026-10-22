@@ -10,6 +10,13 @@ public enum Preferences {
     public static let notificationsKey = "notifications"
     public static let sessionCounterKey = "sessionCounter"
     public static let logsInBackupsKey = "logsInBackups"
+    public static let transparencyKey = "transparency"
+
+    /// How see-through the glass panels are.
+    public enum Transparency: String, CaseIterable, Identifiable, Sendable {
+        case standard, more
+        public var id: Self { self }
+    }
     public static let logsIndexedKey = "logsIndexed"
 
     public enum Appearance: String, CaseIterable, Identifiable, Sendable {

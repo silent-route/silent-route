@@ -12,7 +12,9 @@ import Testing
         pass out quick on utun7 all flags any keep state
         pass out quick proto { tcp udp } all group 4242 flags any keep state
         pass out quick inet proto udp from any port 68 to any port 67 keep state
+        block drop out quick inet proto { tcp udp } to { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 255.255.255.255/32 } port { 53, 853 }
         pass out quick inet to { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 255.255.255.255/32 } flags any keep state
+        block drop out quick inet6 proto { tcp udp } to { fe80::/10, fc00::/7, ff00::/8 } port { 53, 853 }
         pass out quick inet6 to { fe80::/10, ff00::/8 } flags any keep state
         block drop out quick all
 
@@ -24,6 +26,19 @@ import Testing
         #expect(!rules.contains("utun"))
         #expect(!rules.contains("192.168"))
         #expect(rules.hasSuffix("block drop out quick all\n"))
+    }
+
+    /// DNS to the router comes only from sing-box: its group passes first,
+    /// then DNS to the local network is dropped, then the rest of the LAN.
+    @Test func dnsToTheLocalNetworkOnlyFromSingBox() throws {
+        let lines = try PFRules.generate(.init(tunInterface: "utun7", singBoxGroup: 4242, lan: .allow))
+            .split(separator: "\n").map(String.init)
+        let group = try #require(lines.firstIndex { $0.contains("group 4242") })
+        let dnsBlock = try #require(lines.firstIndex { $0.hasPrefix("block drop out quick inet proto") && $0.contains("port { 53, 853 }") })
+        let lanPass = try #require(lines.firstIndex { $0.hasPrefix("pass out quick inet to {") })
+        let v6Block = try #require(lines.firstIndex { $0.hasPrefix("block drop out quick inet6") })
+        let v6Pass = try #require(lines.firstIndex { $0.hasPrefix("pass out quick inet6") })
+        #expect(group < dnsBlock && dnsBlock < lanPass && v6Block < v6Pass)
     }
 
     /// The last rule must be the catch-all block; every pass before it is quick.

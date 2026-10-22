@@ -21,6 +21,11 @@ public enum SingBoxConfig {
         /// Site lists with a `geosite-<name>.srs` file on disk; the same.
         public var siteLists: Set<String>
         public var logLevel: String
+        /// The way out for a Wi-Fi login page: a SOCKS/HTTP proxy on
+        /// localhost whose traffic goes directly, past the tunnel, with the
+        /// router's DNS. Only with its fresh per-start password, which only
+        /// the owner's app gets. Nil: none (probe configs, tests).
+        public var captive: LocalProxy?
 
         public init(ruleSetDirectory: String, cacheFile: String, clashAPIPort: UInt16, clashAPISecret: String,
                     geoIPCountries: Set<String>, siteLists: Set<String> = [], logLevel: String = "warn") {
@@ -33,6 +38,23 @@ public enum SingBoxConfig {
             self.logLevel = logLevel
         }
     }
+
+    /// A proxy on 127.0.0.1 with a user name and password.
+    public struct LocalProxy: Codable, Equatable, Sendable {
+        public var port: UInt16
+        public var username: String
+        public var password: String
+        public init(port: UInt16, username: String, password: String) {
+            self.port = port
+            self.username = username
+            self.password = password
+        }
+    }
+
+    static let captiveTag = "captive-in"
+    /// Inside the TUN's /30, next to its own address: macOS's resolver is
+    /// pointed here while connected, and sing-box answers (hijack-dns).
+    public static let tunDNS = "172.19.0.6"
 
     public enum Failure: Error, Equatable, Sendable, CustomStringConvertible {
         case invalidProfile([String])
@@ -51,6 +73,7 @@ public enum SingBoxConfig {
     // Fixed tags. Tunnel tags are "t-<uuid>", which no user text can produce.
     static let directTag = "direct"
     static let dnsDirect = "dns-direct"
+    static let dnsLocal = "dns-local"
     static let tunTag = "tun-in"
 
     /// The outbound tag of a tunnel itself: the clash API checks it.
@@ -101,6 +124,13 @@ public enum SingBoxConfig {
             ["action": "sniff"],
             ["protocol": "dns", "action": "hijack-dns"],
         ]
+        if env.captive != nil {
+            // The login page's proxy: straight out, resolved by the router.
+            routeRules += [
+                ["inbound": [.string(captiveTag)], "action": "resolve", "server": .string(dnsLocal)],
+                ["inbound": [.string(captiveTag)], "action": "route", "outbound": .string(directTag)],
+            ]
+        }
         if profile.lan == .allow {
             routeRules.append(["ip_is_private": true, "action": "route", "outbound": .string(directTag)])
         }
@@ -155,13 +185,17 @@ public enum SingBoxConfig {
         return [
             "log": ["level": .string(env.logLevel), "timestamp": true],
             "dns": dns(profile, routes: routes, env: env),
-            "inbounds": [[
+            "inbounds": .array([[
                 "type": "tun", "tag": .string(tunTag),
                 "address": [.string(tunAddress4), .string(tunAddress6)],
                 "mtu": .int(profile.mtu ?? 9000),
                 "auto_route": true,
                 "stack": "gvisor",
-            ]],
+            ]] + (env.captive.map { c -> [JSON] in [[
+                "type": "mixed", "tag": .string(captiveTag),
+                "listen": "127.0.0.1", "listen_port": .int(Int(c.port)),
+                "users": [["username": .string(c.username), "password": .string(c.password)]],
+            ]] } ?? [])),
             "outbounds": .array(outbounds),
             "route": .object(route),
             "experimental": [
@@ -188,17 +222,27 @@ public enum SingBoxConfig {
             : "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/\(tag).srs"
     }
 
-    public static func probe(_ tunnel: Tunnel, socksPort: UInt16, dns: DNSSettings = .default) -> JSON {
-        [
+    /// - Parameters:
+    ///   - auth: a user name and password for the SOCKS port, so nothing else
+    ///     on the Mac can use it while the check runs.
+    ///   - direct: bind to the physical interface, past any tunnel — the
+    ///     helper's checks, made the way the real connection is made.
+    public static func probe(_ tunnel: Tunnel, socksPort: UInt16, dns: DNSSettings = .default,
+                             auth: (user: String, password: String)? = nil, direct: Bool = false) -> JSON {
+        var inbound: [String: JSON] = ["type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": .int(Int(socksPort))]
+        if let auth { inbound["users"] = [["username": .string(auth.user), "password": .string(auth.password)]] }
+        var route: [String: JSON] = ["final": "probe", "default_domain_resolver": .string(dnsDirect)]
+        if direct { route["auto_detect_interface"] = true }
+        return [
             "log": ["level": "warn"],
             "dns": [
                 "servers": [["type": "udp", "tag": .string(dnsDirect), "server": .string(address(dns.directServer))]],
                 "final": .string(dnsDirect),
                 "strategy": "ipv4_only",
             ],
-            "inbounds": [["type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": .int(Int(socksPort))]],
+            "inbounds": [.object(inbound)],
             "outbounds": [outbound(tunnel, tag: "probe"), ["type": "direct", "tag": .string(directTag)]],
-            "route": ["final": "probe", "default_domain_resolver": .string(dnsDirect)],
+            "route": .object(route),
         ]
     }
 
@@ -211,8 +255,15 @@ public enum SingBoxConfig {
     static func dns(_ profile: Profile, routes: [Route], env: Environment) -> JSON {
         var servers: [JSON] = [
             ["type": "udp", "tag": .string(dnsDirect), "server": .string(address(profile.dns.directServer))],
+            // The network's own resolver (the router), as DHCP gives it for
+            // the interface in use; follows the Mac to another network.
+            ["type": "dhcp", "tag": .string(dnsLocal)],
         ]
         var dnsRules: [JSON] = []
+        let zones = profile.dns.localZones.map(Validation.normalizeDomain).filter { !$0.isEmpty }
+        if profile.lan == .allow, !zones.isEmpty {
+            dnsRules.append(["domain_suffix": .strings(zones), "action": "route", "server": .string(dnsLocal)])
+        }
         // DoH through a route's own selector, so a name is looked up through
         // the same server its traffic will take (and fails over with it).
         func viaRoute(_ r: Route) -> String {

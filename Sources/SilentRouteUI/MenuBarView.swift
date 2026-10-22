@@ -72,6 +72,11 @@ public struct MenuBarView: View {
                 .padding(.horizontal, 14).padding(.vertical, 10)
             }
 
+            if model.captivePending {
+                Divider()
+                CaptiveBanner(model: model).padding(.horizontal, 14).padding(.vertical, 10)
+            }
+
             if let n = model.notice {
                 Divider()
                 Text(n.text)

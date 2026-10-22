@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.2.0-beta
+
+### No DNS leaks through the router
+
+On most networks macOS asks the router to look up names, and the router is reached over the local network — past the tunnel. The router, and the provider behind it, could see every site you opened even with the VPN on. Some providers also answer with fake addresses for sites they block, so those sites failed even through the VPN.
+
+- **While the VPN is on, macOS's resolver points into the tunnel** (`172.19.0.6`), where sing-box answers by your profile's rules: names of routes through servers are resolved encrypted through that same server, names of direct routes by the direct resolver.
+- **The kill switch now lets only sing-box ask the router** (DNS on ports 53 and 853, IPv4 and IPv6), so nothing that talks to the router directly can leak names either.
+- **Local names still work.** Names in the profile's *local zones* — by default `lan`, `home.arpa` and `internal` (a NAS, a printer, the router's own page) — are asked of the router, and nothing else is. Change the list in the profile's DNS tab. Names ending in `.local` (AirPrint, AirDrop) were never DNS and keep working.
+- **Your network settings are not changed.** Only macOS's live network state is: it goes back when the VPN turns off, on Emergency Restore and when the helper stops; a crashed helper puts it back when it starts again; and a restart of the Mac starts from your own settings, untouched. If a network rewrites its DNS (a new Wi-Fi), the helper points it back within seconds.
+
+### Hotel and café Wi-Fi, without turning the VPN off
+
+Some networks let nothing through until you log in on their web page. Turning the VPN off to log in would let everything on the Mac out directly the moment the network accepts you — and change your address mid-session.
+
+- When the VPN reconnects behind its kill switch and the new network wants a login, Silent Route notices (it asks Apple's check page, `captive.apple.com`, the way macOS does) and keeps sing-box running, with everything still blocked.
+- A notification and **This Wi-Fi needs a login** in the menu bar and the window offer **Open Login Page**: a small browser window inside Silent Route whose traffic — and nothing else on the Mac — goes out directly, with the router's DNS. Its way out listens only on this Mac, takes a new password every time, and is given only to the user who turned the VPN on. The window keeps no cookies or history.
+- Once you have logged in, the servers answer and the VPN carries on **through the same server, with the same address as before** — sing-box was never restarted, and the kill switch was on throughout.
+- Turning the VPN on for the first time on such a network changes nothing: log in first, then turn it on.
+
+### Honest server checks
+
+**Check** on a server is now made by the helper, the way the VPN itself reaches the server: directly, bound to the physical network. Before, with the VPN on, the check went through the VPN — a tunnel inside a tunnel — and the latency it showed included another server. The country and address shown were right; the time now is too.
+
+### Also new
+
+- **Settings › General › Transparency**: *Standard* (as before) or *More* see-through glass panels. On macOS 26 *More* uses the clear variant of Liquid Glass.
+- **[docs/network.md](docs/network.md)** describes every connection Silent Route makes or lets through — by whom, where to, by which path and when — how DNS is resolved, what the kill switch lets out, and the Wi-Fi login step by step.
+
+### Updating
+
+Install the update from the app (Settings › Updates) or from the disk image below. After the relaunch, click **Update Helper** when asked: this version changes how the app and the helper talk to each other. Profiles and logs are kept.
+
 ## 1.1.3-beta
 
 Everything since 1.0.1-beta.

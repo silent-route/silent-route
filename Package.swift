@@ -43,13 +43,13 @@ let package = Package(
         // Messages between the app/CLI and the helper, and the XPC client.
         .target(
             name: "VPNIPC",
-            dependencies: ["VPNCore"],
+            dependencies: ["VPNCore", "VPNRuntime"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The root LaunchDaemon.
         .executableTarget(
             name: "SilentRouteHelper",
-            dependencies: ["VPNCore", "VPNHelperKit", "VPNIPC"],
+            dependencies: ["VPNCore", "VPNHelperKit", "VPNIPC", "VPNRuntime"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(

@@ -2,13 +2,25 @@ import SwiftUI
 import VPNCore
 
 extension View {
-    /// Liquid Glass on macOS 26; the closest material look on 14–15.
-    @ViewBuilder
+    /// Liquid Glass on macOS 26; the closest material look on 14–15. More
+    /// see-through when the user chose so in Settings.
     func glassCard(cornerRadius: CGFloat = 16) -> some View {
+        modifier(GlassCard(cornerRadius: cornerRadius))
+    }
+}
+
+private struct GlassCard: ViewModifier {
+    let cornerRadius: CGFloat
+    @AppStorage(Preferences.transparencyKey) private var transparency = Preferences.Transparency.standard
+
+    func body(content: Content) -> some View {
         if #available(macOS 26, *) {
-            self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+            content.glassEffect(transparency == .more ? .clear : .regular, in: .rect(cornerRadius: cornerRadius))
+        } else if transparency == .more {
+            content.background(.ultraThinMaterial, in: .rect(cornerRadius: cornerRadius))
+                .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
         } else {
-            self.background(.regularMaterial, in: .rect(cornerRadius: cornerRadius))
+            content.background(.regularMaterial, in: .rect(cornerRadius: cornerRadius))
                 .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
         }
     }

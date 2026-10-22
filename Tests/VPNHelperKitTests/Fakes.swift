@@ -28,6 +28,9 @@ actor World {
     // network
     var foreign: String?
     var routingRestored = 0
+    var dnsOverridden = false
+    /// The network wants a login (a hotel Wi-Fi).
+    var captive = false
 
     func record(_ s: String) { log.append(s) }
     func set(_ body: @Sendable (isolated World) -> Void) { body(self) }
@@ -122,6 +125,11 @@ struct FakeNetwork: NetworkInspector {
     func tunInterface() async -> String? { await world.tun }
     func foreignTunnel() async -> String? { await world.foreign }
     func restoreRouting() async { await world.set { $0.routingRestored += 1; $0.log.append("net.restore") } }
+    func overrideDNS(server: String) async { await world.set { $0.dnsOverridden = true; $0.log.append("dns.override") } }
+    func restoreDNS() async { await world.set { $0.dnsOverridden = false; $0.log.append("dns.restore") } }
+    func captivePortal(via proxy: SingBoxConfig.LocalProxy) async -> Bool {
+        await world.set2 { w in w.log.append("net.captive?"); return w.captive }
+    }
 }
 
 final class FakeStore: StateStore, @unchecked Sendable {
@@ -177,7 +185,8 @@ struct Harness {
                             server: Endpoint(host: "b.example.org", port: 443),
                             proto: .hysteria2(Hysteria2(password: "p", tls: TLS(serverName: "b.example.org"))))
 
-    init(killSwitch: KillSwitchMode = .whileConnected, saved: PersistedState? = nil, boot: Date = Date(timeIntervalSince1970: 500_000)) {
+    init(killSwitch: KillSwitchMode = .whileConnected, saved: PersistedState? = nil, boot: Date = Date(timeIntervalSince1970: 500_000),
+         captivePort: UInt16? = nil) {
         store = FakeStore(saved)
         clock = FakeClock(boot: boot)
         var profile = Profile.example(tunnels: [Self.h2, Self.h2b])
@@ -192,7 +201,9 @@ struct Harness {
         let env = SingBoxConfig.Environment(ruleSetDirectory: "/tmp/rules", cacheFile: "/tmp/cache.db",
                                             clashAPIPort: 19090, clashAPISecret: "", geoIPCountries: ["cn"],
                                             siteLists: ["cn", "geolocation-cn"])
-        controller = Controller(profile: profile, options: .init(singBoxGroup: 4242, configEnvironment: env),
+        var options = Controller.Options(singBoxGroup: 4242, configEnvironment: env)
+        options.captivePort = captivePort
+        controller = Controller(profile: profile, options: options,
                                 pf: FakePF(world: world), engine: FakeEngine(world: world),
                                 network: FakeNetwork(world: world), store: store, clock: clock)
     }

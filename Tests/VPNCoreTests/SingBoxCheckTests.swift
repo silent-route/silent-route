@@ -42,6 +42,25 @@ struct SingBoxCheckTests {
         try SingBox.check(SingBoxConfig.generate(Profile.example(tunnels: tunnels), env: SingBox.env))
     }
 
+    /// The helper's server check: a password on the local port, and bound
+    /// to the physical interface (past the VPN's tunnel).
+    @Test func directProbeIsAccepted() throws {
+        let json = SingBoxConfig.probe(Fixtures.h2, socksPort: 28_124, auth: ("probe", "secret"), direct: true)
+        #expect(json.text.contains("\"auto_detect_interface\" : true"))
+        #expect(json.text.contains("\"users\""))
+        try SingBox.check(json)
+    }
+
+    /// The Wi-Fi login proxy and the router's DNS for local names.
+    @Test func captiveLoginProxyIsAccepted() throws {
+        var env = SingBox.env
+        env.captive = .init(port: 28_123, username: "sr", password: "secret")
+        let json = try SingBoxConfig.generate(Fixtures.profile, env: env)
+        #expect(json.text.contains("\"captive-in\""))
+        #expect(json.text.contains("\"resolve\""))
+        try SingBox.check(json)
+    }
+
     /// MTU, multiplexing and TLS fragmentation as sing-box 1.13 expects them.
     @Test func advancedOptionsAreAccepted() throws {
         let uuid = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!

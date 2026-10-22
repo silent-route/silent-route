@@ -35,6 +35,11 @@ public actor Controller {
         public var restartAfterSeconds: Double = 12
         /// After a network change, how often to look until servers answer.
         public var probeIntervalSeconds: Double = 2
+        /// Localhost port for the Wi-Fi login-page proxy; nil: none.
+        public var captivePort: UInt16?
+        /// While a network wants a login: how often to look whether the
+        /// servers answer yet.
+        public var captiveCheckSeconds: Double = 3
         /// Environment for config generation, minus the per-start clash API
         /// port and secret, which the controller fills in.
         public var configEnvironment: SingBoxConfig.Environment
@@ -106,6 +111,11 @@ public actor Controller {
         sessionHook?(e)
     }
 
+    /// The network wants a login; the login-page proxy is open meanwhile.
+    private var captive = false
+    /// That proxy's address and password for the running sing-box.
+    private var captiveProxy: SingBoxConfig.LocalProxy?
+
     /// When the servers stopped answering, while they still don't.
     private var downSince: Date?
     /// The quick checks after a network change; one at a time.
@@ -129,7 +139,8 @@ public actor Controller {
                killSwitchOn: pfToken != nil, lastError: lastError, reconnectAttempts: attempts,
                servers: phase == .connected ? latency.keys.sorted { $0.uuidString < $1.uuidString }
                    .map { ServerState(id: $0, latencyMs: latency[$0] ?? nil) } : [],
-               routes: phase == .connected ? profile.serverRoutes.compactMap { r in via[r.id].map { RouteState(id: r.id, via: $0) } } : [])
+               routes: phase == .connected ? profile.serverRoutes.compactMap { r in via[r.id].map { RouteState(id: r.id, via: $0) } } : [],
+               captivePortal: captive && phase == .reconnecting)
     }
 
     /// A stream of status changes, starting with the current one.
@@ -218,6 +229,7 @@ public actor Controller {
         if let token { await pfRun { await $0.release(token: token) } }
         if let pid { await engine.terminate(pid: pid) }
         await network.restoreRouting()
+        await network.restoreDNS()
         session(.ended(reason: "Emergency Restore"))
         connectedSince = nil
         sessionSince = nil
@@ -279,6 +291,9 @@ public actor Controller {
                 if let r = try? rules(tun: tun) { try? await pfTry { try await $0.load(r) } }
             }
         }
+        guard epoch == my, phase == .connected else { return }
+        // DHCP may have rewritten the DNS (a new Wi-Fi): point it back.
+        await network.overrideDNS(server: SingBoxConfig.tunDNS)
         guard epoch == my, phase == .connected else { return }
         let anyUp = await checkServers(epoch: my)
         guard epoch == my, phase == .connected else { return }
@@ -367,7 +382,10 @@ public actor Controller {
             let anyUp = await checkServers(epoch: my)
             guard epoch == my, phase == .connected else { break }
             await judge(anyUp: anyUp, epoch: my)
-            if anyUp { break }
+            if anyUp {
+                await network.overrideDNS(server: SingBoxConfig.tunDNS)
+                break
+            }
         }
         probing = nil
     }
@@ -417,6 +435,9 @@ public actor Controller {
         // exactly as macOS brought it up.
         await pfRun { await $0.flush() }
         if !rebooted, let old = saved?.pfToken { await pfRun { await $0.release(token: old) } }
+        // A helper that crashed while connected left macOS's DNS pointing
+        // into a tunnel that is gone: put it back.
+        await network.restoreDNS()
         wantConnected = false
         set(.off)
     }
@@ -430,10 +451,19 @@ public actor Controller {
     private func makeConfig() throws -> Data {
         var env = options.configEnvironment
         env.clashAPISecret = (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined()
+        env.captive = options.captivePort.map {
+            .init(port: $0, username: "silentroute",
+                  password: (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined())
+        }
         let data = try SingBoxConfig.generate(profile, env: env).encoded()
         apiSecret = env.clashAPISecret
+        captiveProxy = env.captive
         return data
     }
+
+    /// The Wi-Fi login proxy, while a network wants a login: for the
+    /// owner's app, which opens the login page through it.
+    public var currentCaptiveProxy: SingBoxConfig.LocalProxy? { captive ? captiveProxy : nil }
 
     /// The clash API secret of the running sing-box, for the app's live stats.
     public var currentAPISecret: String? { phase == .connected ? apiSecret : nil }
@@ -509,15 +539,16 @@ public actor Controller {
         via = [:]
         await checkServers(epoch: my)
         guard epoch == my else { return }
-        let def = profile.defaultRoute
-        if case .servers = def.target, case .server = via[def.id] {
-            // fine
-        } else if case .servers = def.target {
-            if epoch == my { await killEngine(pid) }
-            throw CommandError.failed("No server of “\(def.name)” answers — check the servers")
-        } else if !profile.serverRoutes.isEmpty, !latency.values.contains(where: { $0 != nil }) {
-            if epoch == my { await killEngine(pid) }
-            throw CommandError.failed("No server answers — check the servers")
+        if let failure = proofFailure() {
+            // Reconnecting behind the kill switch on a network that wants a
+            // login (a hotel, a café): keep sing-box, open the login-page
+            // proxy, and wait for the servers instead of starting over.
+            if keepBlockingOnFailure, let proxy = captiveProxy, await network.captivePortal(via: proxy), epoch == my {
+                try await waitForLogin(epoch: my, pid: pid, proxy: proxy)
+            } else {
+                if epoch == my { await killEngine(pid) }
+                throw CommandError.failed(failure)
+            }
         }
         guard epoch == my, let tun else { return }
         downSince = nil
@@ -538,6 +569,7 @@ public actor Controller {
             lastError = nil
             set(.connected)
             session(.note("connected"))
+            await network.overrideDNS(server: SingBoxConfig.tunDNS)
             return
         }
         let connectedRules = try rules(tun: tun)
@@ -560,6 +592,55 @@ public actor Controller {
         lastError = nil
         set(.connected)
         session(.note("connected"))
+        // macOS's resolver into the tunnel: no name is asked of the router.
+        await network.overrideDNS(server: SingBoxConfig.tunDNS)
+    }
+
+    /// Why the servers are not proven to carry traffic, or nil if they are:
+    /// "Everything else" must reach one of its servers; any other route
+    /// using servers must reach at least one too, or there is no VPN.
+    private func proofFailure() -> String? {
+        let def = profile.defaultRoute
+        if case .servers = def.target {
+            if case .server = via[def.id] { return nil }
+            return "No server of “\(def.name)” answers — check the servers"
+        }
+        if !profile.serverRoutes.isEmpty, !latency.values.contains(where: { $0 != nil }) {
+            return "No server answers — check the servers"
+        }
+        return nil
+    }
+
+    /// The network wants a login. sing-box keeps running (behind the kill
+    /// switch: nothing else gets out) with the login-page proxy open, until
+    /// the servers answer — the user has logged in — or the network turns
+    /// out not to want a login after all.
+    private func waitForLogin(epoch my: Int, pid: Int32, proxy: SingBoxConfig.LocalProxy) async throws {
+        captive = true
+        session(.note("this network wants a login (a hotel or café Wi-Fi); everything else stays blocked meanwhile"))
+        publish()
+        defer { captive = false }
+        var round = 0
+        while epoch == my {
+            try await clock.sleep(seconds: options.captiveCheckSeconds)
+            guard epoch == my else { return }
+            guard enginePID == pid, await engine.isRunning(pid: pid) else {
+                throw CommandError.failed("sing-box exited while waiting for the Wi-Fi login")
+            }
+            await checkServers(epoch: my)
+            guard epoch == my else { return }
+            if proofFailure() == nil {
+                session(.note("logged in to the network; the servers answer"))
+                return
+            }
+            round += 1
+            // Now and then: still a login page? If not, this is a plain
+            // outage; start over the usual way.
+            if round % 5 == 0, !(await network.captivePortal(via: proxy)) {
+                if epoch == my { await killEngine(pid) }
+                throw CommandError.failed("No server answers — check the servers")
+            }
+        }
     }
 
     // MARK: pf, in order
@@ -620,6 +701,11 @@ public actor Controller {
         if profile.protectionMode != .off || pfToken != nil {
             await holdBlocking(epoch: my)
             guard epoch == my else { return }
+        } else {
+            // No kill switch: traffic goes direct while the tunnel is down,
+            // so names must resolve without it too.
+            await network.restoreDNS()
+            guard epoch == my else { return }
         }
         while epoch == my, wantConnected, !Task.isCancelled {
             do {
@@ -641,6 +727,7 @@ public actor Controller {
     private func teardown() async {
         via = [:]
         latency = [:]
+        await network.restoreDNS()
         if let pid = enginePID {
             enginePID = nil
             await engine.terminate(pid: pid)

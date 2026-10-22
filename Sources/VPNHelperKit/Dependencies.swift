@@ -1,4 +1,5 @@
 import Foundation
+import VPNCore
 
 // Everything the controller does to the system goes through these protocols.
 // Production implementations run pfctl, spawn sing-box and read interfaces;
@@ -45,6 +46,14 @@ public protocol NetworkInspector: Sendable {
     /// Panic cleanup: put the default route back on a physical gateway if it
     /// still points at a dead tunnel, and flush the DNS cache.
     func restoreRouting() async
+    /// While connected: macOS's resolver points at `server` (inside the
+    /// tunnel). Harmless to repeat; re-applied after network changes.
+    func overrideDNS(server: String) async
+    /// Puts macOS's own DNS settings back (also after a crash).
+    func restoreDNS() async
+    /// Whether the network wants a login before anything gets through,
+    /// asked through the login-page proxy (which goes direct).
+    func captivePortal(via proxy: SingBoxConfig.LocalProxy) async -> Bool
 }
 
 public protocol StateStore: Sendable {

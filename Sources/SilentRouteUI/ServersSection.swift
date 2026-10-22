@@ -5,6 +5,9 @@ import VPNRuntime
 /// The servers of a profile — tunnels and proxies. Only how to connect;
 /// where traffic goes is decided by the routes.
 struct ServersSection: View {
+    /// The helper's check (direct, past the tunnel and the kill switch),
+    /// when it is there; otherwise a local sing-box.
+    var check: (@Sendable (Tunnel) async throws -> Probe.Report)? = nil
     @Binding var profile: Profile
     /// Live health, only for the running profile.
     let live: [ServerState]
@@ -167,9 +170,9 @@ struct ServersSection: View {
         probes[t.id] = .running
         Task {
             let result: ProbeState
-            if let sb = SingBoxLocator.path {
+            if let check = check ?? SingBoxLocator.path.map({ sb in { t in try await Probe.run(t, singBox: sb) } }) {
                 do {
-                    let r = try await Probe.run(t, singBox: sb)
+                    let r = try await check(t)
                     var text = "Exit: \([r.city, r.country].compactMap { $0 }.joined(separator: ", ")) · \(r.ip) · \(r.latencyMs) ms"
                     if !r.warnings.isEmpty { text += " · " + r.warnings.joined(separator: "; ") }
                     result = .ok(text)

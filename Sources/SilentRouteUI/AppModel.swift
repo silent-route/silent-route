@@ -393,6 +393,23 @@ public final class AppModel {
         return new.id
     }
 
+    /// A server check made by the helper: the way the VPN reaches the
+    /// server, directly, even while the VPN is on.
+    public func probe(_ t: Tunnel) async throws -> Probe.Report {
+        let r = try await backend.send(.probe(t))
+        if let e = r.error { throw AppModelError(message: e) }
+        guard let report = r.probe else { throw AppModelError(message: "the helper did not answer the check") }
+        return report
+    }
+
+    /// The network wants a login, and this user owns the VPN.
+    public var captivePending: Bool { status.captivePortal && !otherUsersVPN }
+
+    /// The login-page proxy, while a Wi-Fi login is pending.
+    public func captiveProxy() async -> SingBoxConfig.LocalProxy? {
+        try? await backend.send(.captiveLogin).captiveProxy
+    }
+
     /// For the Monitor page; nil while not connected.
     public func apiCredentials() async -> IPC.APICredentials? {
         try? await backend.send(.apiCredentials).api
@@ -426,4 +443,9 @@ enum TrafficStream {
 extension UTType {
     /// A Silent Route profile file (.srprofile): the profile as JSON.
     public static let silentRouteProfile = UTType(exportedAs: "org.silentroute.app.profile", conformingTo: .json)
+}
+
+struct AppModelError: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
 }

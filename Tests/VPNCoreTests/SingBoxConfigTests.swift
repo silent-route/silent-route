@@ -69,6 +69,19 @@ enum Fixtures {
         #expect(set("geosite-netflix")?["url"]?.stringValue == "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-netflix.srs")
     }
 
+    /// Local names go to the router only while the local network is
+    /// reachable directly, and only the zones listed.
+    @Test func localZonesFollowTheLANChoice() throws {
+        var p = Fixtures.profile
+        p.lan = .block
+        var rules = try SingBoxConfig.generate(p, env: Fixtures.env)["dns"]?["rules"]
+        #expect(!(rules?.text.contains("dns-local") ?? true))
+        p.lan = .allow
+        p.dns.localZones = []
+        rules = try SingBoxConfig.generate(p, env: Fixtures.env)["dns"]?["rules"]
+        #expect(!(rules?.text.contains("dns-local") ?? true))
+    }
+
     @Test func advancedOptionsAreChecked() {
         var p = Fixtures.profile
         p.mtu = 576
@@ -152,13 +165,15 @@ enum Fixtures {
     @Test func dnsFollowsTheRules() throws {
         let cfg = try SingBoxConfig.generate(Fixtures.profile, env: Fixtures.env)
         guard case .array(let rules)? = cfg["dns"]?["rules"] else { Issue.record("no dns rules"); return }
-        // The domestic zones and site lists → direct resolver, "Work" → direct,
-        // "Ads" → rejected, then the defaults.
-        #expect(rules[0]["rule_set"] == ["geosite-cn", "geosite-geolocation-cn"])
-        #expect(rules[0]["server"] == "dns-direct")
-        #expect(rules[1]["domain_suffix"] == ["corp.example"])
+        // Local names → the router; the domestic zones and site lists →
+        // direct resolver, "Work" → direct, "Ads" → rejected, then the defaults.
+        #expect(rules[0]["domain_suffix"] == ["lan", "home.arpa", "internal"])
+        #expect(rules[0]["server"] == "dns-local")
+        #expect(rules[1]["rule_set"] == ["geosite-cn", "geosite-geolocation-cn"])
         #expect(rules[1]["server"] == "dns-direct")
-        #expect(rules[2]["action"] == "reject")
+        #expect(rules[2]["domain_suffix"] == ["corp.example"])
+        #expect(rules[2]["server"] == "dns-direct")
+        #expect(rules[3]["action"] == "reject")
         #expect(rules.last?["domain_suffix"] == ["cn", "xn--fiqs8s"])
         #expect(cfg["dns"]?["final"] == .string("dns-r-" + Fixtures.defaultRouteID.uuidString.lowercased()))
     }

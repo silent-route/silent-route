@@ -66,9 +66,19 @@ public enum PFRules {
             "pass out quick proto { tcp udp } all group \(env.singBoxGroup) flags any keep state",
             "pass out quick inet proto udp from any port 68 to any port 67 keep state",
         ]
+        // DNS to the local network (the router) only from sing-box, which
+        // passed above: anything else asking the router would show it every
+        // name looked up, past the tunnel. macOS's own resolver is pointed
+        // into the tunnel meanwhile; this catches what talks to it directly.
+        // mDNS (port 5353: printers, AirDrop) is not DNS and stays open.
+        // With the local network blocked, the final block covers it anyway.
         if env.lan == .allow {
-            lines.append("pass out quick inet to { \(lanNetworks.joined(separator: ", ")) } flags any keep state")
+            lines += [
+                "block drop out quick inet proto { tcp udp } to { \(lanNetworks.joined(separator: ", ")) } port { 53, 853 }",
+                "pass out quick inet to { \(lanNetworks.joined(separator: ", ")) } flags any keep state",
+            ]
         }
+        lines.append("block drop out quick inet6 proto { tcp udp } to { fe80::/10, fc00::/7, ff00::/8 } port { 53, 853 }")
         lines += [
             "pass out quick inet6 to { fe80::/10, ff00::/8 } flags any keep state",
             "block drop out quick all",

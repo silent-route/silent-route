@@ -183,6 +183,87 @@ import Testing
         if case .ended(let reason) = events.all.last { #expect(reason.hasPrefix("could not connect")) } else { Issue.record("not ended") }
     }
 
+    // MARK: DNS
+
+    /// macOS's resolver points into the tunnel only once it is proven, and
+    /// goes back whenever the VPN goes off.
+    @Test func dnsIsOverriddenWhileConnectedAndRestoredAfter() async throws {
+        let h = Harness()
+        try await h.controller.start()
+        let log = await h.world.log
+        let lock = try #require(log.firstIndex(of: "pf.enable"))
+        let dns = try #require(log.firstIndex(of: "dns.override"))
+        #expect(lock < dns, "after the tunnel is proven and locked")
+        #expect(await h.world.dnsOverridden)
+        await h.controller.stop()
+        #expect(!(await h.world.dnsOverridden))
+        try await h.controller.start()
+        await h.controller.panic()
+        #expect(!(await h.world.dnsOverridden), "Emergency Restore puts it back too")
+    }
+
+    @Test func aFailedStartLeavesDNSAlone() async {
+        let h = Harness()
+        await h.world.set { $0.launchFails = true }
+        try? await h.controller.start()
+        #expect(!(await h.world.log.contains("dns.override")))
+    }
+
+    @Test func aHelperRestartPutsLeftoverDNSBack() async {
+        let h = Harness()
+        await h.controller.reconcileOnLaunch()
+        #expect(await h.world.log.contains("dns.restore"))
+    }
+
+    // MARK: Wi-Fi login
+
+    /// The café: the tunnel drops, the network wants a login. Blocking holds,
+    /// sing-box stays (its login-page proxy open), and once the user has
+    /// logged in the same sing-box carries on — no restart, no gap.
+    @Test func aNetworkWantingALoginKeepsBlockingUntilTheServersAnswer() async throws {
+        let h = Harness(captivePort: 28_123)
+        try await h.controller.start()
+        h.clock.realDelay = .milliseconds(5)
+        await h.world.set { $0.healthy = false; $0.captive = true }
+        await h.world.crashAll()                                   // the tunnel goes with the old network
+        #expect(await h.wait(for: .reconnecting) { $0.captivePortal })
+        #expect(await h.world.blocking)
+        #expect(await h.controller.currentCaptiveProxy?.port == 28_123)
+        let launches = await h.world.log.filter { $0.hasPrefix("engine.launch") }.count
+        // Logged in: the servers answer.
+        await h.world.set { $0.healthy = true; $0.captive = false }
+        #expect(await h.wait(for: .connected))
+        #expect(await h.world.log.filter { $0.hasPrefix("engine.launch") }.count == launches, "the same sing-box carries on")
+        #expect(await h.world.blocking)
+        #expect(await h.controller.currentCaptiveProxy == nil, "the way out closes")
+        let log = await h.world.log
+        let crash = try #require(log.firstIndex { $0.hasPrefix("engine.crash") })
+        #expect(!log[crash...].contains("pf.flush") && !log[crash...].contains("pf.release"))
+        h.clock.realDelay = nil
+        await h.controller.stop()
+    }
+
+    /// No login page: an ordinary outage, handled the usual way.
+    @Test func withoutALoginPageItIsAnOrdinaryOutage() async throws {
+        let h = Harness(captivePort: 28_123)
+        try await h.controller.start()
+        await h.world.set { $0.healthy = false; $0.captive = false }
+        await h.world.crashAll()
+        #expect(await h.waitWorld { $0.log.filter { $0.hasPrefix("engine.launch") }.count >= 3 })
+        #expect(!(await h.controller.status.captivePortal))
+        #expect(await h.world.blocking)
+        await h.controller.stop()
+    }
+
+    @Test func turningItOnInACafeDoesNotOpenAWayOut() async {
+        let h = Harness(captivePort: 28_123)
+        await h.world.set { $0.healthy = false; $0.captive = true }
+        try? await h.controller.start()
+        #expect(await h.controller.status.phase == .off)
+        #expect(!(await h.world.blocking), "a failed start changes nothing")
+        #expect(!(await h.world.log.contains("net.captive?")))
+    }
+
     @Test func crashKeepsBlockingAndReconnects() async throws {
         let h = Harness()
         try await h.controller.start()
