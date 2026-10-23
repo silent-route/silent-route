@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import SilentRouteUI
 
@@ -15,6 +16,34 @@ import Testing
     func newer(_ pair: (String, String)) {
         #expect(Updater.isNewer(pair.0, than: pair.1))
         #expect(!Updater.isNewer(pair.1, than: pair.0))
+    }
+
+    static func release(_ tag: String, pre: Bool = true, draft: Bool = false, dmg: Bool = true) -> String {
+        let name = "Silent-Route-\(tag.dropFirst()).dmg"
+        let assets = dmg ? """
+            [{"name": "\(name)", "browser_download_url": "https://example.org/\(name)"},
+             {"name": "\(name).sha256", "browser_download_url": "https://example.org/\(name).sha256"}]
+            """ : "[]"
+        return """
+        {"tag_name": "\(tag)", "html_url": "https://example.org/\(tag)", "draft": \(draft), "prerelease": \(pre), "assets": \(assets)}
+        """
+    }
+
+    /// What is published now decides: a withdrawn release is simply absent,
+    /// and the newest of the rest wins, whatever order GitHub lists them in.
+    @Test func theNewestPublishedReleaseIsPicked() throws {
+        let list = "[" + [Self.release("v1.0.1-beta"), Self.release("v1.2.1-beta"), Self.release("v1.1.3-beta"),
+                          Self.release("v1.3.0-beta", draft: true), Self.release("v1.2.5-beta", dmg: false)].joined(separator: ",") + "]"
+        let r = try Updater.pick(from: Data(list.utf8), includePrereleases: true)
+        #expect(r?.version == "1.2.1-beta")
+        #expect(r?.image.lastPathComponent == "Silent-Route-1.2.1-beta.dmg")
+    }
+
+    @Test func preReleasesOnlyForThoseRunningOne() throws {
+        let list = "[" + [Self.release("v1.2.1-beta"), Self.release("v1.0.0", pre: false)].joined(separator: ",") + "]"
+        #expect(try Updater.pick(from: Data(list.utf8), includePrereleases: false)?.version == "1.0.0")
+        #expect(try Updater.pick(from: Data(list.utf8), includePrereleases: true)?.version == "1.2.1-beta")
+        #expect(try Updater.pick(from: Data("[]".utf8), includePrereleases: true) == nil)
     }
 
     @Test func sameVersionIsNotNewer() {

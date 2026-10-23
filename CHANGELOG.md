@@ -1,6 +1,16 @@
 # Changelog
 
-## 1.2.0-beta
+## 1.2.1-beta
+
+### Updates that don't get stuck
+
+The app could hold on to an update it had found earlier — even after that release was withdrawn or superseded — offer only that version, and fail to install it, with no way to look again.
+
+- **Installing now asks GitHub again first** and installs what is published at that moment: the newest release, not whatever was found hours ago. If nothing newer is published any more, it says so.
+- **Check Now is always there** in Settings › Updates, also while an update is shown, so an old result can always be refreshed.
+- **Automatic checks run every 6 hours** instead of once a day.
+
+If your copy shows an update it cannot install, quit Silent Route and open it again: it checks afresh soon after starting. Or download this release below and replace the app; profiles and logs are kept.
 
 ### No DNS leaks through the router
 

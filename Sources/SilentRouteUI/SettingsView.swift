@@ -220,11 +220,13 @@ public struct SettingsView: View {
                     Spacer()
                     if let r = updater.available {
                         Link("What’s New", destination: r.page)
+                    }
+                    // Always there: a result found earlier may be out of date.
+                    Button("Check Now") { Task { await updater.check() } }
+                        .disabled(updater.state == .checking || { if case .installing = updater.state { true } else { false } }())
+                    if updater.available != nil {
                         Button("Install and Relaunch") { Task { await updater.install() } }
                             .buttonStyle(.borderedProminent)
-                    } else {
-                        Button("Check Now") { Task { await updater.check() } }
-                            .disabled(updater.state == .checking)
                     }
                 }
                 .font(.callout)

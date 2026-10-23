@@ -77,7 +77,7 @@ public final class Updater {
             while !Task.isCancelled {
                 guard let self else { return }
                 if Preferences.checkForUpdates { await self.check() }
-                try? await Task.sleep(for: .seconds(24 * 3600))
+                try? await Task.sleep(for: .seconds(6 * 3600))
             }
         }
     }
@@ -103,12 +103,18 @@ public final class Updater {
     }
 
     /// The newest published release that has a disk image.
-    static func newest(_ repository: String, includePrereleases: Bool) async throws -> Release? {
+    nonisolated static func newest(_ repository: String, includePrereleases: Bool) async throws -> Release? {
         var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repository)/releases?per_page=30")!)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = 20
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw Failure("GitHub did not answer") }
+        return try pick(from: data, includePrereleases: includePrereleases)
+    }
+
+    /// From GitHub's list of releases: the newest published one that has a
+    /// disk image and its checksum.
+    nonisolated static func pick(from data: Data, includePrereleases: Bool) throws -> Release? {
         struct Asset: Decodable { let name: String; let browser_download_url: URL }
         struct Item: Decodable { let tag_name: String; let html_url: URL; let draft: Bool; let prerelease: Bool; let assets: [Asset] }
         let releases = try JSONDecoder().decode([Item].self, from: data).compactMap { r -> Release? in
@@ -154,7 +160,23 @@ public final class Updater {
     // MARK: Installing
 
     public func install() async {
-        guard let release = available else { return }
+        guard let remembered = available, let repository else { return }
+        // What was found earlier may have been withdrawn or superseded since:
+        // install what is published now.
+        state = .installing("Checking for the newest version…")
+        let release: Release
+        do {
+            guard let fresh = try await Self.newest(repository, includePrereleases: Self.isPrerelease(currentVersion)),
+                  Self.isNewer(fresh.version, than: currentVersion) else {
+                lastChecked = Date()
+                state = .upToDate
+                return
+            }
+            release = fresh
+        } catch {
+            // GitHub did not answer: try what was found before.
+            release = remembered
+        }
         let target = Bundle.main.bundleURL
         let fm = FileManager.default
         guard fm.isWritableFile(atPath: target.deletingLastPathComponent().path),
