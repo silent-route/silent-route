@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if quitting || Updater.shared.relaunching || Preferences.quit == .keepRunning { return .terminateNow }
         let s = model.status
-        guard model.helper == .ready, s.phase != .off || s.killSwitchOn else { return .terminateNow }
+        guard model.canTurnOff, s.phase != .off || s.killSwitchOn else { return .terminateNow }
         if !Self.isSystemQuit {
             panel?.dismiss()
             NSApp.activate(ignoringOtherApps: true)
@@ -181,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: Emergency restore and updates from the menu
 
     func confirmEmergencyRestore() {
-        guard model.helper == .ready else { return }
+        guard model.canTurnOff else { return }
         panel?.dismiss()
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()

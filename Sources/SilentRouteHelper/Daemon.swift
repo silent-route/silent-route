@@ -30,8 +30,14 @@ enum Daemon {
         let installer = (try? String(contentsOf: paths.migrateOwner, encoding: .utf8))
             .flatMap { uid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         let console = (try? fm.attributesOfItem(atPath: "/dev/console")[.ownerAccountID] as? NSNumber)?.uint32Value
-        ProfileManager.migrateShared(from: LibraryStore(url: paths.library, legacyURL: paths.legacyProfile),
-                                     to: paths.users, uid: installer ?? console ?? 0)
+        let migratedTo = installer ?? console ?? 0
+        let migrated = ProfileManager.migrateShared(from: LibraryStore(url: paths.library, legacyURL: paths.legacyProfile),
+                                                    to: paths.users, uid: migratedTo)
+        // The VPN an earlier version left on (it resumes below after an
+        // update) is that user's: their profiles are the ones it ran.
+        if migrated, !fm.fileExists(atPath: paths.owner.path) {
+            try? Data(String(migratedTo).utf8).write(to: paths.owner)
+        }
         try? fm.removeItem(at: paths.migrateOwner)
         let version = (try? String(contentsOf: paths.version, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? "dev"
@@ -70,8 +76,10 @@ enum Daemon {
         Task {
             // Before anything can begin a session.
             await controller.setSessionHook { sessionLog.handle($0) }
-            // The VPN runs its owner's profile (it may resume below).
+            // The VPN runs its owner's profile (it may resume below), and a
+            // resumed session's log is theirs.
             if let p = await profiles.ownerProfile() { try? await controller.update(profile: p) }
+            if let owner = await profiles.owner { sessionLog.setOwner(owner) }
             await controller.reconcileOnLaunch()
             log.info("helper ready")
         }

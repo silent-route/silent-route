@@ -61,7 +61,7 @@ ensure_group() {
   if dscl . -read "/Groups/$GROUP" PrimaryGroupID >/dev/null 2>&1; then return; fi
   # A free system gid between 300 and 499.
   local used gid
-  used=$(dscl . -list /Groups PrimaryGroupID | awk '{print $2}')
+  used=$(dscl . -list /Groups PrimaryGroupID 2>/dev/null | awk '{print $2}' || true)
   for gid in $(seq 300 499); do
     echo "$used" | grep -qx "$gid" || break
   done
@@ -168,7 +168,9 @@ do_install() {
   if [ -d "$ROOT/users" ]; then
     cp -Rp "$ROOT/users" "$ROOT/backups/users-$(date +%Y%m%d-%H%M%S)"
   fi
-  ls -1dt "$ROOT/backups"/profiles-*.json "$ROOT/backups"/users-* 2>/dev/null | tail -n +11 | while read -r f; do rm -rf "$f"; done
+  # (ls fails when one of the patterns matches nothing: not an error here.)
+  { ls -1dt "$ROOT/backups"/profiles-*.json "$ROOT/backups"/users-* 2>/dev/null || true; } \
+    | tail -n +11 | while read -r f; do rm -rf "$f"; done
 
   # 3. Swap: stop the old helper, keep its binaries as bin.prev.
   stop_helper
@@ -235,7 +237,7 @@ remove_user_logs() {
     [ "$real" = "$(cd "$home" && pwd -P)/Library/Logs/Silent Route" ] || continue
     rm -rf "$real"
     note "session logs of $user removed"
-  done
+  done || true
 }
 
 do_uninstall() {
@@ -285,8 +287,8 @@ do_uninstall() {
     for d in "$ROOT/users"/*/; do
       u=$(basename "$d")
       [ -f "$d/profiles.json" ] || continue
-      h=$(dscl . -search /Users UniqueID "$u" 2>/dev/null | awk 'NR==1 {print $1}')
-      [ -n "$h" ] && h=$(dscl . -read "/Users/$h" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+      h=$(dscl . -search /Users UniqueID "$u" 2>/dev/null | awk 'NR==1 {print $1}' || true)
+      [ -n "$h" ] && h=$(dscl . -read "/Users/$h" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true)
       [ -n "$h" ] && [ -d "$h" ] && [ ! -L "$h" ] || continue
       dest="$h/Silent Route profiles.json"
       [ -e "$dest" ] || [ -L "$dest" ] && dest="$h/Silent Route profiles $(date +%Y%m%d-%H%M%S).json"

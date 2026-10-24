@@ -146,6 +146,14 @@ public final class AppModel {
                 // came from another download): it does not accept this
                 // app's signature. Updating it is the way forward.
                 helper = .broken(Self.otherVersion)
+                // Still show whether that helper's VPN is on, so it can be
+                // turned off from here.
+                if backend.isInstalled, FileManager.default.isExecutableFile(atPath: Self.installedCLI) {
+                    let (phase, ks) = Self.legacyPhase(await Self.runInstalledCLI(["status"]))
+                    status = VPNStatus(phase: phase, killSwitchOn: ks)
+                    stopTraffic()
+                    return
+                }
             } else {
                 helper = backend.isInstalled ? .broken(error.localizedDescription) : .notInstalled
             }
@@ -195,9 +203,70 @@ public final class AppModel {
 
     public var isOn: Bool { [.connecting, .connected, .reconnecting].contains(status.phase) }
 
+    /// The switch can be used: on needs a helper of this version and a
+    /// profile; off works with any helper (see `legacy`).
+    public var switchEnabled: Bool {
+        if helper == .ready { return library.active != nil }
+        return helperOutdated && isOn
+    }
+
+    /// Off and Emergency Restore work with any installed helper.
+    public var canTurnOff: Bool { helper == .ready || helperOutdated }
+
     public func setOn(_ on: Bool) async {
         notice = nil
+        if helper != .ready, helperOutdated {
+            guard !on else {
+                notice = Notice("Update the helper first (macOS asks for an administrator password).", isError: true)
+                return
+            }
+            await legacy(["down"])
+            return
+        }
         await run(on ? .start : .stop)
+    }
+
+    /// The installed helper's own command line: the same build and the same
+    /// signature as the helper, so it is let in even when this app — from
+    /// another version, signed differently — is not. Used to turn the VPN
+    /// off, restore the network and read the state in that case; never to
+    /// change anything else.
+    nonisolated static let installedCLI = "/Library/Application Support/Silent Route/bin/sroute"
+
+    @discardableResult
+    func legacy(_ args: [String]) async -> String {
+        busy = true
+        defer { busy = false }
+        let out = await Self.runInstalledCLI(args)
+        await refresh()
+        return out
+    }
+
+    nonisolated static func runInstalledCLI(_ args: [String]) async -> String {
+        await Task.detached {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: installedCLI)
+            p.arguments = args
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = pipe
+            guard (try? p.run()) != nil else { return "" }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: data, as: UTF8.self)
+        }.value
+    }
+
+    /// The state as an older helper's command line prints it.
+    nonisolated static func legacyPhase(_ text: String) -> (VPNPhase, killSwitch: Bool) {
+        let first = text.split(separator: "\n").first.map(String.init) ?? ""
+        let phase: VPNPhase
+        if first.hasPrefix("●") { phase = .connected }
+        else if first.contains("Reconnecting") { phase = .reconnecting }
+        else if first.contains("Connecting") { phase = .connecting }
+        else if first.contains("Disconnecting") { phase = .stopping }
+        else { phase = .off }
+        return (phase, text.contains("kill switch: on"))
     }
 
     public func activate(_ id: Profile.ID) async {
@@ -207,6 +276,11 @@ public final class AppModel {
     }
 
     public func panic() async {
+        if helper != .ready, helperOutdated {
+            await legacy(["panic"])
+            notice = Notice("Network restored: the VPN is off and nothing is blocked", isError: false)
+            return
+        }
         await run(.panic, success: "Network restored: the VPN is off and nothing is blocked")
     }
 

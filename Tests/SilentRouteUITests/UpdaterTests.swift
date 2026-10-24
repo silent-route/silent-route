@@ -46,6 +46,15 @@ import Testing
         #expect(try Updater.pick(from: Data("[]".utf8), includePrereleases: true) == nil)
     }
 
+    /// An older helper's state, read from its own command line, so the VPN
+    /// can still be turned off from an app of another version.
+    @Test func olderHelperStateIsRead() {
+        #expect(AppModel.legacyPhase("● Connected — profile “x”\n  since 13:20\n  kill switch: on — nothing leaves") == (.connected, true))
+        #expect(AppModel.legacyPhase("○ Off\n  kill switch: off") == (.off, false))
+        #expect(AppModel.legacyPhase("◌ Reconnecting (attempt 2) — traffic is blocked meanwhile\n  kill switch: on").0 == .reconnecting)
+        #expect(AppModel.legacyPhase("").0 == .off)
+    }
+
     @Test func sameVersionIsNotNewer() {
         #expect(!Updater.isNewer("1.0.0-alpha.1", than: "v1.0.0-alpha.1"))
         #expect(!Updater.isNewer("1.0", than: "1.0.0"))

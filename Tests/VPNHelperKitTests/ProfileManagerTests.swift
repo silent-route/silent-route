@@ -165,6 +165,26 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: shared.url.path), "no shared copy is left")
         #expect(!FileManager.default.fileExists(atPath: shared.url.appendingPathExtension("prev").path))
         #expect(ProfileManager.store(in: users, for: Self.other).load().profiles.isEmpty)
+        #expect(!ProfileManager.migrateShared(from: shared, to: users, uid: Self.me), "only once")
+    }
+
+    /// After an update from a version with one shared library, the VPN that
+    /// was on resumes with the updating user's profile — not an empty one.
+    @Test func aResumedVPNKeepsItsProfileAfterTheMove() async throws {
+        let dir = Self.tempDir()
+        let shared = LibraryStore(url: dir.appendingPathComponent("profiles.json"))
+        let h = Harness()
+        var home = await h.controller.profile
+        home.name = "Home"
+        shared.save(ProfileLibrary(profiles: [home], activeID: home.id))
+        let users = dir.appendingPathComponent("users")
+        let ownerFile = dir.appendingPathComponent("owner")
+        // As the daemon does: move, then make the mover the owner.
+        #expect(ProfileManager.migrateShared(from: shared, to: users, uid: Self.me))
+        try Data(String(Self.me).utf8).write(to: ownerFile)
+        let m = ProfileManager(controller: h.controller, usersDir: users, ownerFile: ownerFile)
+        #expect(await m.owner == Self.me)
+        #expect(await m.ownerProfile()?.id == home.id)
     }
 
     @Test func savedAndReloaded() async throws {

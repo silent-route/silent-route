@@ -1,16 +1,19 @@
 # Changelog
 
-## 1.2.1-beta
+## 1.2.2-beta
 
-### Updates that don't get stuck
+Everything that changed since 1.0.1-beta.
 
-The app could hold on to an update it had found earlier — even after that release was withdrawn or superseded — offer only that version, and fail to install it, with no way to look again.
+### Your data stays yours
 
-- **Installing now asks GitHub again first** and installs what is published at that moment: the newest release, not whatever was found hours ago. If nothing newer is published any more, it says so.
-- **Check Now is always there** in Settings › Updates, also while an update is shown, so an old result can always be refreshed.
-- **Automatic checks run every 6 hours** instead of once a day.
-
-If your copy shows an update it cannot install, quit Silent Route and open it again: it checks afresh soon after starting. Or download this release below and replace the app; profiles and logs are kept.
+- **Profiles belong to each macOS user.** On a Mac shared by several accounts, each has its own profiles; nobody can see another's servers or passwords, from the app or from `sroute`. The VPN itself is one for the whole Mac: while another user's VPN is on, you see only that it is on (not which profile, servers or routes) and may turn it off, since your traffic goes through it too. Their live traffic in Monitor is shown to them alone.
+  - When you update, the profiles of the previous version go to the user who installs the update.
+  - Uninstalling with *Keep a copy of the profiles* puts each user's copy into their own home folder, readable only by them.
+- **Session logs.** Each time the VPN is turned on, its session is logged: connecting and reconnecting (with the reason), failed attempts, profile switches, routes moving between servers, the Mac waking from sleep, and sing-box's own warnings and errors.
+  - Logs are written to the home folder of the user who turned the VPN on, `~/Library/Logs/Silent Route`, readable only by them. Open them in Finder or Console, or in the app under **Logs** (sidebar, under Monitor).
+  - **Problems** narrows a log to errors, warnings, reconnects and failovers; **Show in Finder** opens the file; **Share** copies or saves it, optionally *without addresses* (IP addresses, host names and the names of your profiles, routes and servers are replaced), so a log can be shown to someone safely.
+  - The last 30 sessions are kept. By default logs stay out of Time Machine backups and Spotlight search; both can be allowed in Settings › Advanced.
+  - The old shared `sing-box.log`, readable by every account on the Mac, is deleted on update.
 
 ### No DNS leaks through the router
 
@@ -30,34 +33,6 @@ Some networks let nothing through until you log in on their web page. Turning th
 - Once you have logged in, the servers answer and the VPN carries on **through the same server, with the same address as before** — sing-box was never restarted, and the kill switch was on throughout.
 - Turning the VPN on for the first time on such a network changes nothing: log in first, then turn it on.
 
-### Honest server checks
-
-**Check** on a server is now made by the helper, the way the VPN itself reaches the server: directly, bound to the physical network. Before, with the VPN on, the check went through the VPN — a tunnel inside a tunnel — and the latency it showed included another server. The country and address shown were right; the time now is too.
-
-### Also new
-
-- **Settings › General › Transparency**: *Standard* (as before) or *More* see-through glass panels. On macOS 26 *More* uses the clear variant of Liquid Glass.
-- **[docs/network.md](docs/network.md)** describes every connection Silent Route makes or lets through — by whom, where to, by which path and when — how DNS is resolved, what the kill switch lets out, and the Wi-Fi login step by step.
-
-### Updating
-
-Install the update from the app (Settings › Updates) or from the disk image below. After the relaunch, click **Update Helper** when asked: this version changes how the app and the helper talk to each other. Profiles and logs are kept.
-
-## 1.1.3-beta
-
-Everything since 1.0.1-beta.
-
-### Your data stays yours
-
-- **Profiles belong to each macOS user.** On a Mac shared by several accounts, each has its own profiles; nobody can see another's servers or passwords, from the app or from `sroute`. The VPN itself is one for the whole Mac: while another user's VPN is on, you see only that it is on (not which profile, servers or routes) and may turn it off, since your traffic goes through it too. Their live traffic in Monitor is shown to them alone.
-  - When you update, the profiles of the previous version go to the user who installs the update.
-  - Uninstalling with *Keep a copy of the profiles* puts each user's copy into their own home folder, readable only by them.
-- **Session logs.** Each time the VPN is turned on, its session is logged: connecting and reconnecting (with the reason), failed attempts, profile switches, routes moving between servers, the Mac waking from sleep, and sing-box's own warnings and errors.
-  - Logs are written to the home folder of the user who turned the VPN on, `~/Library/Logs/Silent Route`, readable only by them. Open them in Finder or Console, or in the app under **Logs** (sidebar, under Monitor).
-  - **Problems** narrows a log to errors, warnings, reconnects and failovers; **Show in Finder** opens the file; **Share** copies or saves it, optionally *without addresses* (IP addresses, host names and the names of your profiles, routes and servers are replaced), so a log can be shown to someone safely.
-  - The last 30 sessions are kept. By default logs stay out of Time Machine backups and Spotlight search; both can be allowed in Settings › Advanced.
-  - The old shared `sing-box.log`, readable by every account on the Mac, is deleted on update.
-
 ### New advanced options
 
 All three are off by default and live where they apply. Leave them alone unless you need them.
@@ -66,16 +41,38 @@ All three are off by default and live where they apply. Leave them alone unless 
 - **Multiplexing (MUX)** — server › Advanced. Normally every connection from your Mac (each tab, each app) opens its own connection to the server. With multiplexing, many of them travel inside a few: fewer handshakes, so pages with many requests can open faster, and the optional *padding* adds random data that blurs the shape of your traffic. Two things to know: the server must have multiplexing enabled with the same protocol (h2mux, smux or yamux), or nothing connects; and one slow connection can hold up the others sharing it. Available for VLESS (without XTLS Vision), Trojan, Shadowsocks and VMess; Hysteria2 does not need it — QUIC already works this way.
 - **TLS fragmentation** — route editor. When a secure (HTTPS) connection starts, its first packet carries the site's name in the clear. This option splits that packet into pieces, so that network filtering looking for the name does not recognise it. It is meant for routes that go direct; traffic through a server is encrypted as a whole already. Some sites may connect a little slower.
 
+### Honest server checks
+
+**Check** on a server is now made by the helper, the way the VPN itself reaches the server: directly, bound to the physical network. Before, with the VPN on, the check went through the VPN — a tunnel inside a tunnel — and the latency it showed included another server. The country and address shown were right; the time now is too.
+
 ### Also new
 
 - **Proxies in the formats sellers use.** In Add Server › Proxy, paste `host:port:user:pass`, `user:pass:host:port`, `user:pass@host:port`, `host:port@user:pass`, or the same with `|` or a space between the halves. Passwords containing `:` or `@` work too.
 - **Connection time and traffic** (Settings › General): counted per connection, restarting after a reconnect (the default), or from turning the VPN on until turning it off.
+- **Settings › General › Transparency**: *Standard* (as before) or *More* see-through glass panels. On macOS 26 *More* uses the clear variant of Liquid Glass.
+- **[docs/network.md](docs/network.md)** describes every connection Silent Route makes or lets through — by whom, where to, by which path and when — how DNS is resolved, what the kill switch lets out, and the Wi-Fi login step by step.
 
 ### Improved
 
 - **Fewer dropped connections on network changes.** A Wi-Fi switch or waking from sleep no longer restarts sing-box at once: the helper checks the servers every 2 seconds and restarts only after 12 seconds without any answer. Short drops pass without breaking calls, downloads or open pages. Routes with a kill switch stay blocked meanwhile, as before.
 - The profiles list is drawn as one rounded group, like the groups in System Settings.
 - Routes can be reordered with the up/down arrows on each route, like the servers inside a route.
+
+### Updates that don't get stuck
+
+The app could hold on to an update it had found earlier — even after that release was withdrawn or superseded — offer only that version, and fail to install it, with no way to look again.
+
+- **Installing now asks GitHub again first** and installs what is published at that moment: the newest release, not whatever was found hours ago. If nothing newer is published any more, it says so.
+- **Check Now is always there** in Settings › Updates, also while an update is shown, so an old result can always be refreshed.
+- **Automatic checks run every 6 hours** instead of once a day.
+
+If your copy shows an update it cannot install, quit Silent Route and open it again: it checks afresh soon after starting. Or download this release below and replace the app; profiles and logs are kept.
+
+### Updating from an earlier version works again
+
+- **The helper update could stop halfway.** When the installer tidied up old backups of a kind that did not exist yet, it ended with an error before putting the new helper in place. The old helper kept running — the network was never left broken — but the app and the helper stayed on different versions. Fixed, along with three similar spots in the installer.
+- **With the app and the helper on different versions, the VPN can now always be turned off.** The switch and **Emergency Restore** used to be greyed out in that case. Now the app turns the VPN off and restores the network through the installed helper's own command line, which always matches the helper. Turning the VPN *on* still needs the helper updated first.
+- **A VPN that was on during the update comes back with your profile.** When the profiles of an earlier version move to the user who installs the update, that user also becomes the owner of the running VPN, so it reconnects with their profile rather than an empty one.
 
 ### Security
 
@@ -87,7 +84,7 @@ All three are off by default and live where they apply. Leave them alone unless 
 
 ### Updating
 
-Install the update from the app (Settings › Updates) or from the disk image below. After the relaunch, click **Update Helper** when asked: this version changes how the app and the helper talk to each other. Profiles are kept.
+Install the update from the app (Settings › Updates) or from the disk image below. After the relaunch, click **Update Helper** when asked: this version changes how the app and the helper talk to each other. Profiles and logs are kept.
 
 ## 1.0.1-beta
 

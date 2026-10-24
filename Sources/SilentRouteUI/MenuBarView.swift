@@ -111,7 +111,7 @@ public struct MenuBarView: View {
                     MenuRow(title: "Emergency Restore…", symbol: "cross.case", shortcut: .emergencyRestore) {
                         confirmPanic = true
                     }
-                    .disabled(model.helper != .ready)
+                    .disabled(!model.canTurnOff)
                 }
                 MenuRow(title: quitTitle, symbol: "power", shortcut: .init("q")) { NSApp.terminate(nil) }
                     .help(quit == .keepRunning
@@ -145,8 +145,7 @@ public struct MenuBarView: View {
                 Toggle("", isOn: Binding(get: { model.isOn }, set: { on in Task { await model.setOn(on) } }))
                     .toggleStyle(.switch)
                     .labelsHidden()
-                    .disabled(model.helper != .ready || model.busy || model.library.active == nil
-                              || model.status.phase == .stopping)
+                    .disabled(!model.switchEnabled || model.busy || model.status.phase == .stopping)
             }
             if let d = look.detail {
                 Text(d)

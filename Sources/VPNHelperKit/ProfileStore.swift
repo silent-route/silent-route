@@ -211,9 +211,11 @@ public actor ProfileManager {
 
     /// The library of helpers before profiles were per user: it goes to
     /// `uid` (the user who updated), unless they already have one.
-    public static func migrateShared(from shared: LibraryStore, to usersDir: URL, uid: uid_t) {
+    /// Returns whether there was one to move.
+    @discardableResult
+    public static func migrateShared(from shared: LibraryStore, to usersDir: URL, uid: uid_t) -> Bool {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: shared.url.path) || shared.legacyURL.map({ fm.fileExists(atPath: $0.path) }) == true else { return }
+        guard fm.fileExists(atPath: shared.url.path) || shared.legacyURL.map({ fm.fileExists(atPath: $0.path) }) == true else { return false }
         let target = store(in: usersDir, for: uid)
         try? fm.createDirectory(at: target.url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                 attributes: [.posixPermissions: 0o700])
@@ -223,5 +225,6 @@ public actor ProfileManager {
         for u in [shared.url, shared.url.appendingPathExtension("prev")] + (shared.legacyURL.map { [$0] } ?? []) {
             try? fm.removeItem(at: u)
         }
+        return true
     }
 }

@@ -294,8 +294,7 @@ struct ConnectionFooter: View {
                 Toggle("", isOn: Binding(get: { model.isOn }, set: { on in Task { await model.setOn(on) } }))
                     .toggleStyle(.switch)
                     .labelsHidden()
-                    .disabled(model.helper != .ready || model.busy || model.library.active == nil
-                              || model.status.phase == .stopping)
+                    .disabled(!model.switchEnabled || model.busy || model.status.phase == .stopping)
             }
             if model.status.phase == .connected {
                 // Fixed rows and columns: the numbers change every second,
