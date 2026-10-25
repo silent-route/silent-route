@@ -102,8 +102,8 @@ public struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if let loginError { Text(loginError).font(.caption).foregroundStyle(.red) }
             }
-            Section("Connection time and traffic") {
-                Picker("Connection time and traffic", selection: $sessionCounter) {
+            Section("Connection Time and Traffic") {
+                Picker("Connection Time and Traffic", selection: $sessionCounter) {
                     Text("Start again after a reconnect").tag(Preferences.SessionCounter.connection)
                     Text("Count from turning the VPN on").tag(Preferences.SessionCounter.session)
                 }
@@ -115,8 +115,8 @@ public struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Section("When Silent Route quits") {
-                Picker("When Silent Route quits", selection: $quit) {
+            Section("When Silent Route Quits") {
+                Picker("When Silent Route Quits", selection: $quit) {
                     Text("Turn the VPN off").tag(Preferences.Quit.disconnect)
                     Text("Keep the VPN running").tag(Preferences.Quit.keepRunning)
                 }
@@ -133,8 +133,8 @@ public struct SettingsView: View {
 
     private var notificationsTab: some View {
         page {
-            Section("Notify about") {
-                Picker("Notify about", selection: $notifications) {
+            Section("Notify About") {
+                Picker("Notify About", selection: $notifications) {
                     Text("Route changes only").tag(Preferences.Notifications.routes)
                     Text("All events").tag(Preferences.Notifications.all)
                 }
@@ -171,7 +171,7 @@ public struct SettingsView: View {
                     Button("Update Helper…") { Task { await model.installHelper() } }.disabled(model.busy)
                 }
             }
-            Section("Session logs") {
+            Section("Session Logs") {
                 Toggle("Include logs in Time Machine backups", isOn: $logsInBackups)
                     .onChange(of: logsInBackups) { _, _ in Preferences.applyLogFolderSettings() }
                 Toggle("Let Spotlight index logs", isOn: $logsIndexed)

@@ -47,6 +47,8 @@ struct ProfileEditor: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .fixedSize()                       // natural width, centred, as in Apple's apps
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
             Divider()
@@ -198,7 +200,7 @@ struct DNSSection: View {
                     Text("Enter an IP address, e.g. 1.1.1.1").font(.caption).foregroundStyle(.red)
                 }
             }
-            Card(title: "Local names via the router",
+            Card(title: "Local Names via the Router",
                  subtitle: "While the VPN is on, every other name goes through Silent Route — the router is never asked. Names in these zones only the local network knows (a NAS, a printer, the router's own page), so they are asked of the router. One zone per line; empty: none. Applies while the local network is reachable directly (Network tab).") {
                 TextEditor(text: $zones)
                     .font(.body.monospaced())
@@ -207,7 +209,7 @@ struct DNSSection: View {
                     .padding(6)
                     .background(.background.opacity(0.6), in: .rect(cornerRadius: 8))
             }
-            Card(title: "Always resolved directly", subtitle: "Domain zones, one per line: cn, lan, home.arpa…") {
+            Card(title: "Always Resolved Directly", subtitle: "Domain zones, one per line: cn, lan, home.arpa…") {
                 TextEditor(text: $suffixes)
                     .font(.body.monospaced())
                     .frame(minHeight: 90)
@@ -248,7 +250,7 @@ struct NetworkSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Card(title: "Local network", subtitle: "Printers, the router, AirDrop, a NAS, other computers at home or in the office.") {
+            Card(title: "Local Network", subtitle: "Printers, the router, AirDrop, a NAS, other computers at home or in the office.") {
                 Picker("", selection: $profile.lan) {
                     Text("Reachable directly").tag(LANPolicy.allow)
                     Text("Like the rest of the internet — by this profile's rules").tag(LANPolicy.block)
@@ -258,17 +260,9 @@ struct NetworkSection: View {
             }
             Card(title: "Tunnel MTU",
                  subtitle: "The largest packet sent through the tunnel at once. Automatic suits almost every network; if sites load halfway and hang (a phone hotspot, some hotel or provider networks), try 1400 or 1280.") {
-                Picker("", selection: $profile.mtu) {
-                    Text("Automatic").tag(Int?.none)
-                    ForEach([1500, 1420, 1400, 1280], id: \.self) { Text(String($0)).tag(Int?.some($0)) }
-                    if let m = profile.mtu, ![1500, 1420, 1400, 1280].contains(m) {
-                        Text("Custom: \(String(m))").tag(Int?.some(m))
-                    }
-                }
-                .labelsHidden()
-                .fixedSize()
+                MTUPicker(mtu: $profile.mtu)
             }
-            Card(title: "Protection while reconnecting",
+            Card(title: "Protection While Reconnecting",
                  subtitle: "The kill switch is set per route, in Routes. While the VPN itself restarts (a few seconds after a crash or a network change), everything outside the tunnel is blocked if any route through servers has its kill switch on.") {
                 Label(profile.protectionMode == .off
                       ? "Off: no route through servers has a kill switch"
@@ -278,6 +272,69 @@ struct NetworkSection: View {
                 Text("After a restart of the Mac the network is always clean: nothing is blocked and the VPN does not start by itself.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+/// The common values in a menu, and any other in a field next to it
+/// (`Custom…`), checked against `Profile.mtuRange`.
+struct MTUPicker: View {
+    @Binding var mtu: Int?
+    @State private var custom = false
+    @State private var text = ""
+
+    static let presets = [1500, 1420, 1400, 1280]
+
+    private enum Choice: Hashable {
+        case automatic, value(Int), custom
+    }
+
+    private var choice: Binding<Choice> {
+        Binding(
+            get: {
+                if custom { return .custom }
+                guard let m = mtu else { return .automatic }
+                return Self.presets.contains(m) ? .value(m) : .custom
+            },
+            set: { new in
+                switch new {
+                case .automatic: custom = false; mtu = nil
+                case .value(let v): custom = false; mtu = v
+                case .custom:
+                    custom = true
+                    text = mtu.map(String.init) ?? ""
+                }
+            })
+    }
+
+    private var valid: Bool { Int(text).map(Profile.mtuRange.contains) ?? false }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Picker("", selection: choice) {
+                Text("Automatic").tag(Choice.automatic)
+                Divider()
+                ForEach(Self.presets, id: \.self) { Text(String($0)).tag(Choice.value($0)) }
+                Divider()
+                Text("Custom…").tag(Choice.custom)
+            }
+            .labelsHidden()
+            .fixedSize()
+            if choice.wrappedValue == .custom {
+                TextField("", text: $text, prompt: Text("1280–9000"))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 90)
+                    .onChange(of: text) { _, t in
+                        if let v = Int(t), Profile.mtuRange.contains(v) { mtu = v }
+                    }
+                if !text.isEmpty, !valid {
+                    Text("Enter a number from \(Profile.mtuRange.lowerBound) to \(Profile.mtuRange.upperBound)")
+                        .font(.caption).foregroundStyle(.red)
+                }
+            }
+        }
+        .onAppear {
+            if let m = mtu, !Self.presets.contains(m) { custom = true; text = String(m) }
         }
     }
 }

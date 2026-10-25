@@ -19,7 +19,7 @@ Runs on Intel and Apple Silicon Macs, macOS 14 Sonoma through macOS 27 Golden Ga
 - Profiles are exported and imported as `.srprofile` files (JSON). Note that they contain server credentials.
 - Profiles belong to each macOS user: on a shared Mac every account has its own profiles, and nobody sees another's servers or passwords. The VPN itself is one for the whole Mac; while someone else's is on, you see only that it is on, and may turn it off.
 - Advanced options, off by default, where they belong:
-  - **Tunnel MTU** (profile › Network): the largest packet sent through the tunnel at once. Automatic suits almost every network; 1400 or 1280 helps where pages load halfway and hang.
+  - **Tunnel MTU** (profile › Network): the largest packet sent through the tunnel at once. Automatic suits almost every network; 1400 or 1280 helps where pages load halfway and hang. **Custom…** takes any value from 1280 to 9000.
   - **Multiplexing** (server › Advanced): many connections carried inside a few to the server — fewer handshakes, optional padding that blurs the traffic's shape. The server must have it enabled with the same protocol (h2mux, smux or yamux). Not for Hysteria2 (QUIC already multiplexes) or VLESS with XTLS Vision.
   - **TLS fragmentation** (route): splits the first packet of secure connections, where the site's name is visible, into pieces. Meant for routes that go direct.
 - The Monitor page shows throughput, per-app traffic and the list of open connections with the route and server used by each.

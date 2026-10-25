@@ -18,6 +18,8 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     private let host: NSHostingView<AnyView>
     private weak var button: NSStatusBarButton?
     private var monitors: [Any] = []
+    private var appSwitch: NSObjectProtocol?
+    private var spaceSwitch: NSObjectProtocol?
     private var anchor: NSRect = .zero
     private var placing = false
 
@@ -62,6 +64,10 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
         guard isVisible else { return }
         for m in monitors { NSEvent.removeMonitor(m) }
         monitors = []
+        if let o = appSwitch { NSWorkspace.shared.notificationCenter.removeObserver(o) }
+        if let o = spaceSwitch { NSWorkspace.shared.notificationCenter.removeObserver(o) }
+        appSwitch = nil
+        spaceSwitch = nil
         orderOut(nil)
         button?.highlight(false)
     }
@@ -99,6 +105,21 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     private func watchOutsideClicks() {
         for m in monitors { NSEvent.removeMonitor(m) }
         monitors = []
+        // Like the system's own menus: switching to another app (⌘Tab, the
+        // Dock, Mission Control) closes it, not only a click elsewhere.
+        if let o = appSwitch { NSWorkspace.shared.notificationCenter.removeObserver(o) }
+        appSwitch = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard app?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+            MainActor.assumeIsolated { self?.dismiss() }
+        }
+        // Another desktop (a swipe, Mission Control): close too.
+        if let o = spaceSwitch { NSWorkspace.shared.notificationCenter.removeObserver(o) }
+        spaceSwitch = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dismiss() }
+        }
         // Other apps' windows and the desktop.
         if let g = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown],
                                                      handler: { [weak self] _ in
@@ -119,6 +140,10 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     }
 
     override func cancelOperation(_ sender: Any?) { dismiss() }
+
+    /// Another window took the keyboard (ours or another app's): close, as a
+    /// menu does. Menus the panel's own pickers open do not take it.
+    func windowDidResignKey(_ notification: Notification) { dismiss() }
 
     // MARK: Background
 

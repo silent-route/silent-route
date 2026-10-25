@@ -12,6 +12,7 @@ public struct MainWindow: View {
     @State private var deleting: Profile?
     @State private var dropTargeted = false
     @State private var monitor = TrafficMonitor()
+    @State private var settingsOpen = false
 
     enum Item: Hashable {
         case monitor
@@ -79,6 +80,11 @@ public struct MainWindow: View {
             if selection == .monitor || selection == .logs { return }
             selection = (model.library.activeID ?? ids.first).map(Item.profile)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in updateSettingsOpen() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in updateSettingsOpen() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { note in
+            updateSettingsOpen(closing: note.object as? NSWindow)
+        }
         .onChange(of: selection) { _, new in
             if new == .monitor {
                 monitor.setProfile(model.library.active)
@@ -86,6 +92,13 @@ public struct MainWindow: View {
             } else {
                 monitor.stop()
             }
+        }
+    }
+
+    /// SwiftUI's Settings window, by the identifier it gives it.
+    private func updateSettingsOpen(closing: NSWindow? = nil) {
+        settingsOpen = NSApp.windows.contains { w in
+            w !== closing && w.isVisible && (w.identifier?.rawValue.contains("Settings") ?? false)
         }
     }
 
@@ -184,6 +197,9 @@ public struct MainWindow: View {
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")
             }
+            // Its look follows the Settings window, not the pointer: dimmed
+            // while Settings is open, crisp when it is closed.
+            .opacity(settingsOpen ? 0.45 : 1)
             .help("Settings (⌘,)")
         }
         ToolbarItem(placement: .primaryAction) {

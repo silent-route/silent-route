@@ -100,9 +100,11 @@ struct RouteCard: View {
                         .buttonStyle(.borderless).disabled(index == profile.routes.count - 1)
                         .help("Move down: checked later")
                 }
-                Button("Edit", action: edit).controlSize(.small)
-                if !isDefault {
-                    Menu {
+                // Everything about the route in one place, as in Apple's
+                // apps; a double-click on the card edits it too.
+                Menu {
+                    Button("Edit…", action: edit)
+                    if !isDefault {
                         Button("Duplicate") {
                             var copy = route
                             copy.id = UUID()
@@ -111,11 +113,12 @@ struct RouteCard: View {
                         }
                         Divider()
                         Button("Delete", role: .destructive) { profile.routes.removeAll { $0.id == route.id } }
-                    } label: { Image(systemName: "ellipsis.circle") }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Edit, duplicate or delete this route")
             }
 
             PathView(profile: profile, route: route, liveServers: liveServers, live: live)
@@ -146,6 +149,8 @@ struct RouteCard: View {
         }
         .padding(14)
         .glassCard(cornerRadius: 14)
+        .contentShape(.rect(cornerRadius: 14))
+        .onTapGesture(count: 2, perform: edit)
         .opacity(route.enabled || isDefault ? 1 : 0.55)
         .contextMenu { Button("Edit…", action: edit) }
     }
@@ -344,7 +349,7 @@ struct RouteEditor: View {
                             .textFieldStyle(.roundedBorder)
                     }
 
-                    section("Send to") {
+                    section("Send To") {
                         Picker("", selection: kind) {
                             ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
                         }
@@ -356,7 +361,7 @@ struct RouteEditor: View {
                     }
 
                     if !isDefault {
-                        section("Sites and addresses", hint: "One per line: youtube.com (with subdomains), =exact.example.com, keyword:tube, geoip:cn (a country), geosite:geolocation-cn (a site list), 10.0.0.0/8, 1.2.3.4") {
+                        section("Sites and Addresses", hint: "One per line: youtube.com (with subdomains), =exact.example.com, keyword:tube, geoip:cn (a country), geosite:geolocation-cn (a site list), 10.0.0.0/8, 1.2.3.4") {
                             TextEditor(text: $destinations)
                                 .font(.body.monospaced())
                                 .frame(minHeight: 100)
@@ -366,7 +371,7 @@ struct RouteEditor: View {
                                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
                         }
                         section("Apps", hint: "Everything these programs send, including their helper processes") { apps }
-                        section("Ports and protocol") {
+                        section("Ports and Protocol") {
                             HStack {
                                 TextField("443, 8000-8100", text: $ports).textFieldStyle(.roundedBorder).frame(maxWidth: 220)
                                 Picker("", selection: $route.conditions.network) {

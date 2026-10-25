@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.2-beta
+## 1.2.3-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -37,7 +37,7 @@ Some networks let nothing through until you log in on their web page. Turning th
 
 All three are off by default and live where they apply. Leave them alone unless you need them.
 
-- **Tunnel MTU** — profile › Network. The MTU is the largest packet sent through the tunnel at once. *Automatic* suits almost every network. On some networks (a phone hotspot, some hotel and provider networks) large packets get lost, and it looks like pages loading halfway and hanging; choosing 1400 or 1280 fixes that.
+- **Tunnel MTU** — profile › Network. The MTU is the largest packet sent through the tunnel at once. *Automatic* suits almost every network. On some networks (a phone hotspot, some hotel and provider networks) large packets get lost, and it looks like pages loading halfway and hanging; choosing 1400 or 1280 fixes that. *Custom…* takes any value from 1280 to 9000.
 - **Multiplexing (MUX)** — server › Advanced. Normally every connection from your Mac (each tab, each app) opens its own connection to the server. With multiplexing, many of them travel inside a few: fewer handshakes, so pages with many requests can open faster, and the optional *padding* adds random data that blurs the shape of your traffic. Two things to know: the server must have multiplexing enabled with the same protocol (h2mux, smux or yamux), or nothing connects; and one slow connection can hold up the others sharing it. Available for VLESS (without XTLS Vision), Trojan, Shadowsocks and VMess; Hysteria2 does not need it — QUIC already works this way.
 - **TLS fragmentation** — route editor. When a secure (HTTPS) connection starts, its first packet carries the site's name in the clear. This option splits that packet into pieces, so that network filtering looking for the name does not recognise it. It is meant for routes that go direct; traffic through a server is encrypted as a whole already. Some sites may connect a little slower.
 
@@ -57,6 +57,14 @@ All three are off by default and live where they apply. Leave them alone unless 
 - **Fewer dropped connections on network changes.** A Wi-Fi switch or waking from sleep no longer restarts sing-box at once: the helper checks the servers every 2 seconds and restarts only after 12 seconds without any answer. Short drops pass without breaking calls, downloads or open pages. Routes with a kill switch stay blocked meanwhile, as before.
 - The profiles list is drawn as one rounded group, like the groups in System Settings.
 - Routes can be reordered with the up/down arrows on each route, like the servers inside a route.
+
+### Interface
+
+- **Edit… is in each route's ⋯ menu**, *Everything else* included, next to Duplicate and Delete. A double-click on a route opens it too.
+- **Logs are listed as one rounded group**, like the profiles. The session still running is marked with a green dot on the right, as the active profile is.
+- **The Settings button in the toolbar is dimmed while Settings is open** and back to normal once it is closed.
+- **The menu bar panel closes when you switch to another app or another desktop.** It used to stay on screen and could look as if it had opened by itself.
+- Section headers use Title Case, as in Apple's apps, and the Routes / Servers / DNS / Network switcher is centred.
 
 ### Updates that don't get stuck
 

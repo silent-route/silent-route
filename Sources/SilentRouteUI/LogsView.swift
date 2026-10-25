@@ -40,10 +40,15 @@ struct LogsView: View {
                 ContentUnavailableView("No sessions yet", systemImage: "doc.text",
                                        description: Text("Each time you turn the VPN on, its session is logged here and in ~/Library/Logs/Silent Route. The last 30 are kept, and only you can see yours — other users of this Mac see only their own."))
             } else {
-                List(sessions, selection: $selected) { s in
-                    SessionRow(session: s).tag(s.id)
+                // One rounded group, like the profiles in the sidebar.
+                List(selection: $selected) {
+                    ForEach(Array(sessions.enumerated()), id: \.element.id) { i, s in
+                        SessionRow(session: s)
+                            .tag(s.id)
+                            .listRowBackground(GroupedRowBackground(isFirst: i == 0, isLast: i == sessions.count - 1))
+                    }
                 }
-                .listStyle(.inset)
+                .listStyle(.sidebar)
             }
         }
     }
@@ -144,18 +149,19 @@ private struct SessionRow: View {
     let session: LogSession
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
+        HStack(spacing: 8) {
+            Image(systemName: "doc.text").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(session.started.formatted(.relative(presentation: .named, unitsStyle: .wide)).capitalizedFirst
                      + ", " + session.started.formatted(date: .omitted, time: .shortened))
                     .lineLimit(1)
-                if session.ended == nil {
-                    Text("Live").font(.caption2.weight(.semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(.green, in: .capsule)
-                }
+                Text(details).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Text(details).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Spacer()
+            // The running session: the dot the active profile has.
+            if session.ended == nil {
+                StatusDot(color: .green, size: 8).help("This session is still going")
+            }
         }
         .padding(.vertical, 2)
     }
