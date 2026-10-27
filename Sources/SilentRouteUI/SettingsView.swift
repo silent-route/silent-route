@@ -230,7 +230,7 @@ public struct SettingsView: View {
                     }
                 }
                 .font(.callout)
-                Text("Updates come from the project’s GitHub releases. Profiles are kept; the helper is updated after the relaunch (macOS asks for an administrator password).")
+                Text("Updates come from the project’s GitHub releases. Profiles are kept. macOS asks for an administrator password to update the helper; with the VPN on, traffic outside it stays blocked until the VPN is back.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

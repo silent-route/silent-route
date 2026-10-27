@@ -12,10 +12,15 @@ import Observation
 /// (alpha, beta) are offered only to someone already running one.
 ///
 /// Installing: download, check the sha256, mount the image, check that it is a
-/// properly signed Silent Route bundle, swap it in place of this one and
-/// relaunch. The new app then updates the helper (macOS asks for the
-/// administrator password) — profiles stay where they are, in the helper's
+/// properly signed Silent Route bundle, update the helper from it (macOS
+/// asks for the administrator password right then), swap the app in place
+/// of this one and relaunch. Profiles stay where they are, in the helper's
 /// own directory, and are backed up by the installer first.
+///
+/// With the VPN on and a kill switch, everything outside the tunnel stays
+/// blocked while one helper replaces the other, and the new helper brings
+/// the VPN back by itself. Until then the update can be stopped: the VPN is
+/// turned off and the network goes back to normal.
 @MainActor @Observable
 public final class Updater {
     public static let shared = Updater()
@@ -41,6 +46,35 @@ public final class Updater {
     /// Set while quitting into a new version: the quit must not turn the
     /// VPN off (the new app reconnects it after updating the helper).
     public private(set) var relaunching = false
+    /// The step under way while installing, for the progress window.
+    public private(set) var stage: Stage?
+    /// Stop was asked for while the helper was being replaced: the VPN is
+    /// turned off as soon as a helper answers.
+    public private(set) var stopping = false
+    private var installTask: Task<Void, Never>?
+    /// The helper could not be updated: a small window says so and offers
+    /// to restore the network.
+    public private(set) var helperFailure: HelperFailure?
+    /// Restoring the network after such a failure.
+    public private(set) var restoring = false
+    /// Relaunched into the new version while the VPN reconnects: the
+    /// update's window stays until it is back (or turned off).
+    public var resuming = false
+
+    public struct HelperFailure: Equatable, Sendable {
+        public var message: String
+        /// A helper answers: the previous one was put back.
+        public var helperRunning: Bool
+    }
+
+    public enum Stage: Equatable, Sendable {
+        /// Downloading and checking: stopping changes nothing.
+        case preparing
+        /// The password prompt and the helper's replacement.
+        case helper
+        /// Swapping the app and relaunching.
+        case relaunching
+    }
 
     /// "owner/repo", or nil for a build without an update source.
     public let repository: String?
@@ -160,7 +194,33 @@ public final class Updater {
     // MARK: Installing
 
     public func install() async {
+        guard installTask == nil else { return }
+        let task = Task { await performInstall() }
+        installTask = task
+        await task.value
+        installTask = nil
+        stage = nil
+        stopping = false
+    }
+
+    /// Stops the update. While downloading, nothing has changed yet. While
+    /// the helper is being replaced the installer cannot be interrupted (it
+    /// runs as root, and stopping it halfway could leave no helper at all):
+    /// it finishes, and then the VPN is turned off, so the network goes back
+    /// to normal.
+    public func cancel() {
+        switch stage {
+        case .preparing: installTask?.cancel()
+        case .helper:
+            stopping = true
+            state = .installing("Stopping — the VPN turns off as soon as the helper is back…")
+        case .relaunching, nil: break
+        }
+    }
+
+    private func performInstall() async {
         guard let remembered = available, let repository else { return }
+        stage = .preparing
         // What was found earlier may have been withdrawn or superseded since:
         // install what is published now.
         state = .installing("Checking for the newest version…")
@@ -169,11 +229,12 @@ public final class Updater {
             guard let fresh = try await Self.newest(repository, includePrereleases: Self.isPrerelease(currentVersion)),
                   Self.isNewer(fresh.version, than: currentVersion) else {
                 lastChecked = Date()
-                state = .upToDate
+                state = Task.isCancelled ? .available(remembered) : .upToDate
                 return
             }
             release = fresh
         } catch {
+            if Task.isCancelled { state = .available(remembered); return }
             // GitHub did not answer: try what was found before.
             release = remembered
         }
@@ -184,51 +245,137 @@ public final class Updater {
             state = .failed("Silent Route can’t replace itself in \(target.deletingLastPathComponent().path). Download the release from GitHub instead.")
             return
         }
+        // On the same volume as the app, so the swap is a rename.
+        guard let work = try? fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                     appropriateFor: target, create: true) else {
+            state = .failed("Update failed: no room to unpack it next to the app")
+            return
+        }
+        defer { try? fm.removeItem(at: work) }
+        let app: URL
         do {
             state = .installing("Downloading \(release.version)…")
-            // On the same volume as the app, so the swap is a rename.
-            let work = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
-                                  appropriateFor: target, create: true)
-            defer { try? fm.removeItem(at: work) }
-            let image = work.appendingPathComponent(release.image.lastPathComponent)
-            let (tmp, resp) = try await URLSession.shared.download(from: release.image)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw Failure("the download failed") }
-            try fm.moveItem(at: tmp, to: image)
-            let (sumData, _) = try await URLSession.shared.data(from: release.checksum)
-            let want = String(decoding: sumData, as: UTF8.self).split(separator: " ").first.map(String.init)?
-                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let got = try await Task.detached { try Self.sha256(of: image) }.value
-            guard let want, want == got else { throw Failure("the download is damaged (checksum mismatch)") }
+            app = try await download(release, into: work, named: target.lastPathComponent)
+        } catch {
+            state = Task.isCancelled ? .available(release) : .failed("Update failed: \(error.localizedDescription)")
+            return
+        }
+        guard !Task.isCancelled else { state = .available(release); return }
 
-            state = .installing("Checking the new version…")
-            let mount = work.appendingPathComponent("mount")
-            try fm.createDirectory(at: mount, withIntermediateDirectories: true)
-            try await Self.run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-noautoopen",
-                                                    "-mountpoint", mount.path, image.path])
-            let app = work.appendingPathComponent(target.lastPathComponent)
-            var copyError: Error?
-            do {
-                try await Self.run("/usr/bin/ditto", [mount.appendingPathComponent("Silent Route.app").path, app.path])
-            } catch {
-                copyError = error
+        // The helper, from the new version, now: the password is asked while
+        // the user is here, not after the relaunch.
+        if fm.fileExists(atPath: Self.installedHelper) {
+            stage = .helper
+            state = .installing("Updating the helper — enter your password if macOS asks…")
+            let script = app.appendingPathComponent("Contents/Resources/install-helper.sh")
+            let result = await AppModel.runInstaller(script, ["install", "--user", NSUserName()])
+            if stopping {
+                // Whichever helper is there now — the new one, or the old
+                // one put back — its own command line turns the VPN off.
+                _ = await AppModel.runInstalledCLI(["down"])
             }
-            try? await Self.run("/usr/bin/hdiutil", ["detach", "-force", mount.path])
-            if let copyError { throw copyError }
-            guard let new = Bundle(url: app), new.bundleIdentifier == Bundle.main.bundleIdentifier else {
-                throw Failure("the download does not contain Silent Route")
+            switch result {
+            case .done: break
+            case .cancelled:
+                state = stopping ? .failed("Update stopped. The VPN is off and the network is back to normal.") : .available(release)
+                return
+            case .failed(let m):
+                state = .failed("The helper could not be updated, so nothing was changed\(stopping ? " (the VPN is off)" : ""): \(m)")
+                await reportHelperFailure(m)
+                return
             }
-            try await Self.run("/usr/bin/codesign", ["--verify", "--strict", app.path])
-            // Downloaded by the app, not a browser — but clear it anyway so
-            // the relaunch never stops at a Gatekeeper prompt.
-            try? await Self.run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", app.path])
+        }
 
-            state = .installing("Installing…")
+        stage = .relaunching
+        state = .installing("Installing…")
+        do {
             _ = try fm.replaceItemAt(target, withItemAt: app)
-            UserDefaults.standard.set(true, forKey: Self.pendingHelperUpdateKey)
-            relaunch(target)
         } catch {
             state = .failed("Update failed: \(error.localizedDescription)")
+            return
         }
+        // If the helper could not be updated above (none was installed),
+        // the new app offers it.
+        UserDefaults.standard.set(true, forKey: Self.pendingHelperUpdateKey)
+        relaunch(target)
+    }
+
+    /// Shows the failure window. Whether a helper answers decides what it says.
+    public func reportHelperFailure(_ message: String) async {
+        let running = await AppModel.runInstalledCLIStatus(["status"]) == 0
+        helperFailure = HelperFailure(message: message, helperRunning: running)
+    }
+
+    public func dismissHelperFailure() { helperFailure = nil }
+
+    /// For the snapshot tool: an updater frozen in a given state.
+    public static func preview(stage: Stage? = nil, step: String = "", failure: String? = nil,
+                               helperRunning: Bool = false, resuming: Bool = false) -> Updater {
+        let u = Updater()
+        u.stage = stage
+        if stage != nil { u.state = .installing(step) }
+        u.helperFailure = failure.map { HelperFailure(message: $0, helperRunning: helperRunning) }
+        u.resuming = resuming
+        return u
+    }
+
+    /// The VPN off and nothing blocked. Through the installed helper when
+    /// one answers; otherwise as root (macOS asks for the password), which
+    /// lifts what a stopped helper left behind.
+    public func restoreNetwork() async {
+        restoring = true
+        defer { restoring = false }
+        if await AppModel.runInstalledCLIStatus(["panic"]) == 0 {
+            helperFailure = nil
+            return
+        }
+        guard let script = Bundle.main.url(forResource: "install-helper", withExtension: "sh") else { return }
+        switch await AppModel.runInstaller(script, ["restore-network"]) {
+        case .done: helperFailure = nil
+        case .cancelled: break
+        case .failed(let m):
+            helperFailure?.message = "The network could not be restored: \(m). Restarting the Mac restores it."
+        }
+    }
+
+    nonisolated static let installedHelper = "/Library/Application Support/Silent Route/bin/SilentRouteHelper"
+
+    /// Downloads and checks a release; returns the app, unpacked into `work`.
+    private func download(_ release: Release, into work: URL, named name: String) async throws -> URL {
+        let fm = FileManager.default
+        let image = work.appendingPathComponent(release.image.lastPathComponent)
+        let (tmp, resp) = try await URLSession.shared.download(from: release.image)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw Failure("the download failed") }
+        try fm.moveItem(at: tmp, to: image)
+        let (sumData, _) = try await URLSession.shared.data(from: release.checksum)
+        let want = String(decoding: sumData, as: UTF8.self).split(separator: " ").first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let got = try await Task.detached { try Self.sha256(of: image) }.value
+        guard let want, want == got else { throw Failure("the download is damaged (checksum mismatch)") }
+        try Task.checkCancellation()
+
+        state = .installing("Checking the new version…")
+        let mount = work.appendingPathComponent("mount")
+        try fm.createDirectory(at: mount, withIntermediateDirectories: true)
+        try await Self.run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-noautoopen",
+                                                "-mountpoint", mount.path, image.path])
+        let app = work.appendingPathComponent(name)
+        var copyError: Error?
+        do {
+            try await Self.run("/usr/bin/ditto", [mount.appendingPathComponent("Silent Route.app").path, app.path])
+        } catch {
+            copyError = error
+        }
+        try? await Self.run("/usr/bin/hdiutil", ["detach", "-force", mount.path])
+        if let copyError { throw copyError }
+        guard let new = Bundle(url: app), new.bundleIdentifier == Bundle.main.bundleIdentifier else {
+            throw Failure("the download does not contain Silent Route")
+        }
+        try await Self.run("/usr/bin/codesign", ["--verify", "--strict", app.path])
+        // Downloaded by the app, not a browser — but clear it anyway so
+        // the relaunch never stops at a Gatekeeper prompt.
+        try? await Self.run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", app.path])
+        return app
     }
 
     /// Waits for this process to end, then opens the new app.

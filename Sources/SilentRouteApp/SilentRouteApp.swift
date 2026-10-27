@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private var panel: StatusPanel?
     private var mainWindow: NSWindow?
+    private var updateWindow: NSWindow?
     private var launchedAtLogin = false
     private var ready = false
     private var pendingOpens: [URL] = []
@@ -62,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ready = true
         flushPendingOpens()
         Updater.shared.startAutomaticChecks()
+        watchUpdates()
         finishSelfUpdate()
     }
 
@@ -204,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case .available(let r):
                 let alert = NSAlert()
                 alert.messageText = "Silent Route \(r.version) is available"
-                alert.informativeText = "You have \(updater.currentVersion). Profiles are kept; after the relaunch the helper is updated (macOS asks for an administrator password)."
+                alert.informativeText = "You have \(updater.currentVersion). Profiles are kept. macOS asks for an administrator password to update the helper."
                 alert.addButton(withTitle: "Install and Relaunch")
                 alert.addButton(withTitle: "Later")
                 if alert.runModal() == .alertFirstButtonReturn { await updater.install() }
@@ -225,8 +227,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.runModal()
     }
 
-    /// Relaunched by the updater: bring the helper to this version too, so
-    /// the VPN (if it was on) comes back.
+    /// Relaunched by the updater. The helper was updated before the
+    /// relaunch, and the VPN (if it was on) is coming back by itself: the
+    /// update's window stays until it is. A helper still from another
+    /// version (none was installed then, or that step failed) is updated now.
     private func finishSelfUpdate() {
         let key = Updater.pendingHelperUpdateKey
         guard UserDefaults.standard.bool(forKey: key) else { return }
@@ -236,7 +240,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 try? await Task.sleep(for: .milliseconds(250))
             }
             if model.helperOutdated { await model.installHelper() }
+            if [.connecting, .reconnecting].contains(model.status.phase) { Updater.shared.resuming = true }
         }
+    }
+
+    // MARK: Update window
+
+    /// Shown while an update runs, while the VPN comes back after it, and
+    /// when the helper could not be updated.
+    private func watchUpdates() {
+        let (wanted, phase) = withObservationTracking {
+            (UpdateWindowView.wanted(Updater.shared), model.status.phase)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.watchUpdates() }
+        }
+        let updater = Updater.shared
+        if updater.resuming, phase == .connected || phase == .off {
+            updater.resuming = false
+            return
+        }
+        if wanted { showUpdateWindow() } else { updateWindow?.orderOut(nil) }
+    }
+
+    private func showUpdateWindow() {
+        if updateWindow == nil {
+            let host = NSHostingController(rootView: UpdateWindowView(updater: .shared, model: model))
+            host.sizingOptions = .preferredContentSize
+            // No close button: it closes when there is nothing left to show.
+            let w = NSWindow(contentViewController: host)
+            w.styleMask = [.titled, .fullSizeContentView]
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.title = "Silent Route Update"
+            w.isReleasedWhenClosed = false
+            w.level = .floating
+            w.center()
+            updateWindow = w
+        }
+        guard updateWindow?.isVisible == false else { return }
+        panel?.dismiss()
+        updateWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: Files from Finder

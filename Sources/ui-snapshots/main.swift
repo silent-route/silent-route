@@ -159,5 +159,10 @@ MainActor.assumeIsolated {
     render("add-tunnel", AddServerSheet(draft: ServerDraft(de), isNew: false, profile: home) { _ in })
     render("add-proxy", AddServerSheet(draft: ServerDraft(kind: .proxy), isNew: true, profile: home) { _ in })
     render("settings", SettingsView(model: model(.ready, connected)))
+    render("update-helper", UpdateWindowView(updater: .preview(stage: .helper, step: "Updating the helper — enter your password if macOS asks…"),
+                                             model: model(.ready, connected)))
+    render("update-failed", UpdateWindowView(updater: .preview(failure: "the new helper does not answer — restoring the previous version"),
+                                             model: model(.ready, connected)))
+    render("update-resuming", UpdateWindowView(updater: .preview(resuming: true), model: model(.ready, reconnecting)))
     render("route-editor", RouteEditor(route: streaming, profile: home, isNew: false, isDefault: false) { _ in })
 }

@@ -64,8 +64,16 @@ public protocol StateStore: Sendable {
 public protocol Clock: Sendable {
     func sleep(seconds: Double) async throws
     func now() -> Date
-    /// Kernel boot time; changes only across a reboot.
+    /// Kernel boot time. Meant to change only across a reboot, but macOS
+    /// shifts it when the clock is corrected (after sleep, by time sync).
     func bootTime() -> Date
+    /// This boot's unique id (`kern.bootsessionuuid`): exact, unlike the
+    /// boot time. Nil where there is none.
+    func bootSession() -> String?
+}
+
+public extension Clock {
+    func bootSession() -> String? { nil }
 }
 
 /// What survives a helper restart. Written on every transition.
@@ -75,11 +83,24 @@ public struct PersistedState: Codable, Equatable, Sendable {
     public var enginePID: Int32?
     public var pfToken: String?
     public var bootTime: Date
+    /// Absent in state written by versions before 1.2.4.
+    public var bootSession: String?
 
-    public init(wantConnected: Bool = false, enginePID: Int32? = nil, pfToken: String? = nil, bootTime: Date) {
+    public init(wantConnected: Bool = false, enginePID: Int32? = nil, pfToken: String? = nil, bootTime: Date,
+                bootSession: String? = nil) {
         self.wantConnected = wantConnected
         self.enginePID = enginePID
         self.pfToken = pfToken
         self.bootTime = bootTime
+        self.bootSession = bootSession
+    }
+
+    /// Whether the Mac has restarted since this state was written.
+    public func isFromAnotherBoot(bootTime now: Date, bootSession current: String?) -> Bool {
+        if let mine = bootSession, let current { return mine != current }
+        // Older state: by boot time, with room for the clock's corrections.
+        // A real restart moves it by the whole uptime before it plus the
+        // restart itself — far more than this.
+        return abs(bootTime.timeIntervalSince(now)) > 10
     }
 }

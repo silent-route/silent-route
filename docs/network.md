@@ -68,6 +68,12 @@ Names ending in `.local` (AirPrint, AirDrop, Bonjour) use multicast DNS, not DNS
 
 When the network changes (another Wi-Fi, waking from sleep), sing-box keeps running. The helper checks the servers every 2 seconds and restarts sing-box only if none has answered for 12 seconds. Short drops pass without breaking calls or downloads. Routes with a kill switch stay blocked the whole time.
 
+## Updates
+
+While the helper is updated, one helper process replaces the other. With the VPN on and a kill switch on any route, the old helper stops sing-box but leaves pf blocking everything outside the tunnel; the new helper takes over that block and reconnects. There is no moment of open network in between. With the VPN off (or no kill switch), nothing is blocked and the network is not touched. If no helper comes back, the block stays until you choose **Restore Network** in the update window or restart the Mac — never silently lifted.
+
+The boot check that keeps a restarted Mac pristine uses the kernel's boot session id (`kern.bootsessionuuid`), so a helper restarted by an update is never mistaken for a reboot.
+
 ## Logging in to a hotel or café Wi-Fi
 
 Some networks let nothing through until you log in on their web page. Turning the VPN off to log in would let everything on the Mac out directly the moment the network accepts you. Silent Route keeps the VPN on and opens a single, narrow way out instead:

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.3-beta
+## 1.2.4-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -64,7 +64,16 @@ All three are off by default and live where they apply. Leave them alone unless 
 - **Logs are listed as one rounded group**, like the profiles. The session still running is marked with a green dot on the right, as the active profile is.
 - **The Settings button in the toolbar is dimmed while Settings is open** and back to normal once it is closed.
 - **The menu bar panel closes when you switch to another app or another desktop.** It used to stay on screen and could look as if it had opened by itself.
-- Section headers use Title Case, as in Apple's apps, and the Routes / Servers / DNS / Network switcher is centred.
+- **A profile's name is the page's title**, large and editable at the top, with its state and number of servers and routes underneath. The Routes / Servers / DNS / Network switcher sits in the toolbar, centred, as Apple's guidelines for macOS suggest.
+- Section headers use Title Case, as in Apple's apps.
+
+### Updates that keep you protected
+
+- **With the VPN on, nothing leaks during an update.** Before, the old helper lifted the kill switch when it stopped, so for a few seconds traffic went out directly, and the VPN did not always come back afterwards. Now everything outside the tunnel stays blocked while one helper replaces the other, and the new helper brings the VPN back by itself, through the same profile. With the VPN off, the network is not touched at all.
+- **The VPN comes back after an update.** The helper told a restart of the Mac from a helper restart by the boot time, which macOS shifts when it corrects the clock; a shift of a second was enough to take an update for a reboot and leave the VPN off. It now uses the kernel's boot session id.
+- **The password is asked when you click Install,** not after the relaunch: the helper is updated from the new version first, then the app is replaced and relaunched.
+- **A small window shows the update's progress.** While downloading, **Cancel** stops it with nothing changed. While the helper is replaced with the VPN on, **Cancel…** warns that traffic will no longer be protected, then turns the VPN off so the network goes back to normal. After the relaunch the window stays until the VPN is back, with **Turn VPN Off…** in case it does not come back.
+- **If the helper cannot be updated,** the previous one is put back. If no helper starts at all, nothing is unblocked behind your back: the window says what happened and offers **Restore Network** (or restart the Mac).
 
 ### Updates that don't get stuck
 
@@ -92,7 +101,7 @@ If your copy shows an update it cannot install, quit Silent Route and open it ag
 
 ### Updating
 
-Install the update from the app (Settings › Updates) or from the disk image below. After the relaunch, click **Update Helper** when asked: this version changes how the app and the helper talk to each other. Profiles and logs are kept.
+Install the update from the app (Settings › Updates) or from the disk image below. Coming from 1.2.3 or earlier, the update still runs the old way once: after the relaunch, click **Update Helper** if asked. From this version on, the helper is updated before the relaunch, with the VPN kept protected. Profiles and logs are kept.
 
 ## 1.0.1-beta
 

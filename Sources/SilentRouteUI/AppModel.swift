@@ -242,6 +242,20 @@ public final class AppModel {
         return out
     }
 
+    /// The exit status only: 0 when the helper answered and did it.
+    nonisolated static func runInstalledCLIStatus(_ args: [String]) async -> Int32 {
+        await Task.detached {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: installedCLI)
+            p.arguments = args
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return -1 }
+            p.waitUntilExit()
+            return p.terminationStatus
+        }.value
+    }
+
     nonisolated static func runInstalledCLI(_ args: [String]) async -> String {
         await Task.detached {
             let p = Process()
@@ -380,7 +394,12 @@ public final class AppModel {
         guard let script = Bundle.main.url(forResource: "install-helper", withExtension: "sh") else {
             return .failed("The installer is missing from the app bundle — rebuild the app")
         }
-        return await Task.detached { () -> PrivilegedResult in
+        return await Self.runInstaller(script, args)
+    }
+
+    /// `script` with `args`, as root, after macOS's password prompt.
+    nonisolated static func runInstaller(_ script: URL, _ args: [String]) async -> PrivilegedResult {
+        await Task.detached { () -> PrivilegedResult in
             func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
             let command = ([script.path] + args).map(q).joined(separator: " ")
             let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
@@ -402,7 +421,9 @@ public final class AppModel {
         switch await runInstaller(["install", "--user", NSUserName()]) {
         case .done: notice = Notice(updating ? "Helper updated" : "Helper installed", isError: false)
         case .cancelled: break
-        case .failed(let m): notice = Notice("Installation failed: \(m)", isError: true)
+        case .failed(let m):
+            notice = Notice("Installation failed: \(m)", isError: true)
+            if updating { await Updater.shared.reportHelperFailure(m) }
         }
         await refresh()
         await reloadLibrary()

@@ -165,4 +165,12 @@ public struct SystemClock: Clock {
         sysctlbyname("kern.boottime", &tv, &size, nil, 0)
         return Date(timeIntervalSince1970: Double(tv.tv_sec))
     }
+    public func bootSession() -> String? {
+        var size = 0
+        guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 0 else { return nil }
+        var buf = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("kern.bootsessionuuid", &buf, &size, nil, 0) == 0 else { return nil }
+        let s = String(cString: buf)
+        return s.isEmpty ? nil : s
+    }
 }

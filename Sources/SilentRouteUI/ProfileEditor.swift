@@ -38,28 +38,17 @@ struct ProfileEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
-            Picker("Section", selection: $section) {
-                ForEach(Section.allCases) { s in Text(s.rawValue).tag(s) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()                       // natural width, centred, as in Apple's apps
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 12)
-            Divider()
             ScrollView {
-                Group {
-                    switch section {
-                    case .routes: RoutesSection(profile: $draft, liveServers: running ? model.status.servers : [],
-                                                liveRoutes: running ? model.status.routes : [])
-                    case .servers: ServersSection(check: helperCheck, profile: $draft, live: running ? model.status.servers : [])
-                    case .dns: DNSSection(dns: $draft.dns)
-                    case .network: NetworkSection(profile: $draft)
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    Group {
+                        switch section {
+                        case .routes: RoutesSection(profile: $draft, liveServers: running ? model.status.servers : [],
+                                                    liveRoutes: running ? model.status.routes : [])
+                        case .servers: ServersSection(check: helperCheck, profile: $draft, live: running ? model.status.servers : [])
+                        case .dns: DNSSection(dns: $draft.dns)
+                        case .network: NetworkSection(profile: $draft)
+                        }
                     }
                 }
                 .padding(20)
@@ -75,17 +64,40 @@ struct ProfileEditor: View {
         .background {
             Button("") { Task { await save() } }.keyboardShortcut("s").hidden().disabled(!dirty)
         }
+        .toolbar {
+            // Switching views of the main area: a segmented control in the
+            // toolbar, centred (Apple's guidelines for macOS).
+            ToolbarItem(placement: .principal) {
+                Picker("Section", selection: $section) {
+                    ForEach(Section.allCases) { s in Text(s.rawValue).tag(s) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Routes, servers, DNS and network settings of this profile")
+            }
+        }
     }
 
+    /// The profile's name as the page's title, where reading starts (top,
+    /// leading), with its state underneath — like a list in Reminders.
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            nameField
+            VStack(alignment: .leading, spacing: 3) {
+                nameField
+                HStack(spacing: 6) {
+                    if isActive {
+                        StatusDot(color: .green, size: 7)
+                        Text("Active").foregroundStyle(.green)
+                        Text("·").foregroundStyle(.tertiary)
+                    }
+                    Text("\(Plural.count(draft.tunnels.count, "server", "servers")) · \(Plural.count(draft.routes.count + 1, "route", "routes"))")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+            }
             Spacer(minLength: 12)
-            if isActive {
-                Label("Active", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.callout)
-            } else {
+            if !isActive {
                 Button("Make Active") { Task { await model.activate(saved.id) } }
                     .disabled(model.busy || dirty)
                     .help(dirty ? "Save your changes first" : "Switch to this profile — right away if the VPN is on")
@@ -108,14 +120,11 @@ struct ProfileEditor: View {
             set: { new in
                 draft.name = new.trimmingCharacters(in: .whitespaces).isEmpty ? placeholder : new
             })
-        return HStack(spacing: 8) {
-            Text("Name").foregroundStyle(.secondary)
-            TextField("Name", text: text, prompt: Text(placeholder))
-                .textFieldStyle(.roundedBorder)
-                .font(.title3)
-                .frame(maxWidth: 340)
-                .help("The profile’s name, as the menu bar and the list show it")
-        }
+        return TextField("Name", text: text, prompt: Text(placeholder))
+            .textFieldStyle(.plain)
+            .font(.system(size: 26, weight: .bold))
+            .frame(maxWidth: 480, alignment: .leading)
+            .help("The profile’s name, as the menu bar and the list show it — click to rename")
     }
 
     private var saveBar: some View {

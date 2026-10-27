@@ -163,6 +163,13 @@ final class FakeClock: Clock, @unchecked Sendable {
     }
     func now() -> Date { lock.withLock { t } }
     func bootTime() -> Date { boot }
+    /// Nil: like a state file from before boot sessions were recorded.
+    var session: String? {
+        get { lock.withLock { _session } }
+        set { lock.withLock { _session = newValue } }
+    }
+    private var _session: String?
+    func bootSession() -> String? { session }
     var recordedSleeps: [Double] { lock.withLock { sleeps } }
 }
 

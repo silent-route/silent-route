@@ -52,7 +52,11 @@ A route with several servers fails over on its own, which is convenient, but you
 
 Settings → Updates (or Silent Route → Check for Updates…) downloads the new release, verifies its SHA-256 and code signature, replaces the app and relaunches it. Replacing the app manually with a newer DMG works as well; in that case remove the quarantine attribute again.
 
-After an update the app reinstalls the helper (administrator password). Profiles are stored by the helper in `/Library/Application Support/Silent Route` and are not affected; the installer also keeps the last ten copies in `backups/`. If the VPN was on, it reconnects with the kill switch active.
+The helper is updated from the new version right away, before the relaunch: macOS asks for the administrator password when you click Install. A small window shows the progress. Profiles are stored by the helper in `/Library/Application Support/Silent Route` and are not affected; the installer also keeps the last ten copies in `backups/`.
+
+- **VPN on, with a kill switch:** traffic outside the tunnel stays blocked the whole time one helper replaces the other, and the new helper brings the VPN back by itself, through the same profile. Until then, **Cancel** in the update window turns the VPN off and the network goes back to normal (you are warned that traffic is then no longer protected).
+- **VPN off:** the network is not touched at all.
+- **If the new helper does not start**, the previous one is put back and carries on. If neither starts, nothing is lifted on its own: the update window offers **Restore Network** (the VPN turns off, nothing stays blocked; administrator password), and a restart of the Mac clears it too. By hand: `sudo "/Library/Application Support/Silent Route/uninstall.sh" restore-network`.
 
 ### Uninstalling
 

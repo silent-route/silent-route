@@ -564,6 +564,72 @@ import Testing
         #expect(await h.world.tokens.isEmpty)
     }
 
+    /// The boot time macOS reports moves when the clock is corrected: a few
+    /// seconds of drift is still the same boot, and the VPN comes back.
+    @Test func bootTimeDriftIsNotAReboot() async {
+        let boot = Date(timeIntervalSince1970: 500_000)
+        let h = Harness(saved: PersistedState(wantConnected: true, pfToken: "T9", bootTime: boot.addingTimeInterval(-3)), boot: boot)
+        await h.world.set { $0.tokens.insert("T9") }
+        await h.controller.reconcileOnLaunch()
+        #expect(await h.wait(for: .connected))
+    }
+
+    /// With boot sessions on both sides, they alone decide.
+    @Test func bootSessionDecides() async {
+        let boot = Date(timeIntervalSince1970: 500_000)
+        let other = Harness(saved: PersistedState(wantConnected: true, bootTime: boot, bootSession: "A"), boot: boot)
+        other.clock.session = "B"
+        await other.controller.reconcileOnLaunch()
+        #expect(await other.controller.status.phase == .off)
+        #expect(!(await other.world.blocking))
+
+        let same = Harness(saved: PersistedState(wantConnected: true, bootTime: boot.addingTimeInterval(-600), bootSession: "A"),
+                           boot: boot)
+        same.clock.session = "A"
+        await same.controller.reconcileOnLaunch()
+        #expect(await same.wait(for: .connected))
+    }
+
+    /// An update stops the helper with the VPN on: the network stays blocked
+    /// until the next helper resumes the VPN — never open in between.
+    @Test func helperStopWithVPNOnKeepsBlocking() async throws {
+        let h = Harness()
+        try await h.controller.start()
+        await h.controller.shutdownForExit()
+        #expect(await h.world.blocking)
+        #expect(await h.world.anchorRules?.contains("utun") == false)
+        #expect(await h.world.running.isEmpty)
+        let saved = h.store.load()
+        #expect(saved?.wantConnected == true)
+        #expect(saved?.pfToken != nil)
+        #expect(!(await h.world.log.suffix(4).contains("pf.flush")))
+
+        // The next helper picks up the same block and reconnects.
+        let next = Harness(saved: saved, boot: h.clock.boot)
+        await next.world.set { w in w.tokens = [saved!.pfToken!]; w.anchorRules = "blocked" }
+        await next.controller.reconcileOnLaunch()
+        #expect(await next.wait(for: .connected))
+        #expect(await next.world.tokens == [saved!.pfToken!])
+    }
+
+    /// With the VPN off, a helper stop (an update) leaves the network alone.
+    @Test func helperStopWithVPNOffLeavesTheNetwork() async {
+        let h = Harness()
+        await h.controller.shutdownForExit()
+        #expect(!(await h.world.blocking))
+        #expect(!(await h.world.log.contains { $0.hasPrefix("pf.load") || $0 == "pf.enable" }))
+        #expect(h.store.load()?.wantConnected == false)
+    }
+
+    /// No kill switch in the profile: nothing is blocked during an update.
+    @Test func helperStopWithoutKillSwitchDoesNotBlock() async throws {
+        let h = Harness(killSwitch: .off)
+        try await h.controller.start()
+        await h.controller.shutdownForExit()
+        #expect(!(await h.world.blocking))
+        #expect(h.store.load()?.wantConnected == true)
+    }
+
     @Test func firstLaunchIsClean() async {
         let h = Harness(saved: nil)
         await h.controller.reconcileOnLaunch()

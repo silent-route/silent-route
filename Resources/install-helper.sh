@@ -11,6 +11,9 @@
 #           binaries and a copy of the profiles are kept; if the new helper
 #           does not answer within 15 s, the previous one is put back.
 #           Profiles are never overwritten by an install.
+# restore-network
+#           The way back after a failed update left no helper running: stops
+#           what is left of it and lifts the kill switch. The VPN is off.
 # uninstall [--yes] [--user NAME] [--keep-profiles] [--keep-logs]
 #           Stops the helper (which disconnects and lifts the kill switch),
 #           makes sure no Silent Route rule or process is left, then deletes
@@ -40,12 +43,31 @@ note() { echo "• $*"; }
 
 stop_helper() {
   if launchctl print "system/$LABEL" >/dev/null 2>&1; then
-    # SIGTERM: the helper disconnects and leaves the network clean.
+    # SIGTERM: the helper disconnects. With the VPN on and a kill switch, it
+    # leaves everything outside the tunnel blocked for the next helper, which
+    # resumes the VPN; otherwise the network is left as it is.
     launchctl bootout "system/$LABEL" 2>/dev/null || true
     for _ in $(seq 1 50); do
       launchctl print "system/$LABEL" >/dev/null 2>&1 || break
       sleep 0.1
     done
+  fi
+}
+
+# Lifts the block a stopped helper may have left (only our anchor, and only
+# our own reference on pf), and forgets that the VPN was wanted. For when no
+# helper will come back to do it: uninstalling, or restore-network after an
+# install that failed.
+release_block() {
+  local token
+  pfctl -a "$ANCHOR" -F all >/dev/null 2>&1 || true
+  if [ -f "$ROOT/state.json" ]; then
+    token=$(plutil -extract pfToken raw -o - "$ROOT/state.json" 2>/dev/null || true)
+    case "$token" in
+      ''|*[!0-9]*) ;;
+      *) pfctl -X "$token" >/dev/null 2>&1 || true ;;
+    esac
+    rm -f "$ROOT/state.json"
   fi
 }
 
@@ -207,8 +229,16 @@ EOF
       mv "$ROOT/bin" "$ROOT/bin.failed"
       mv "$ROOT/bin.prev" "$ROOT/bin"
       launchctl bootstrap system "$PLIST" || true
-      helper_answers && echo "previous version restored" >&2
+      if helper_answers; then
+        echo "previous version restored" >&2
+        exit 1
+      fi
     fi
+    # No helper runs. If the VPN was on, everything outside the tunnel stays
+    # blocked — the app offers to restore the network (restore-network), and
+    # a restart of the Mac clears it too.
+    stop_helper
+    echo "no helper is running; restore the network in Silent Route, with: sudo \"$ROOT/uninstall.sh\" restore-network, or by restarting the Mac" >&2
     exit 1
   fi
 
@@ -271,7 +301,7 @@ do_uninstall() {
   # 2. Belt and braces: nothing of ours may stay in pf or keep running, even
   #    if the helper was already gone or broken. Only our own anchor and our
   #    own processes — never anything else's.
-  pfctl -a "$ANCHOR" -F all >/dev/null 2>&1 || true
+  release_block
   pkill -f "^$ROOT/bin/sing-box run" 2>/dev/null || true
   pkill -f "^$ROOT/bin/SilentRouteHelper" 2>/dev/null || true
   note "helper stopped, kill switch removed"
@@ -321,8 +351,18 @@ do_uninstall() {
   fi
 }
 
+do_restore_network() {
+  stop_helper
+  pkill -f "^$ROOT/bin/sing-box run" 2>/dev/null || true
+  release_block
+  # A helper that answers again starts from a clean network.
+  launchctl print "system/$LABEL" >/dev/null 2>&1 || { [ -f "$PLIST" ] && launchctl bootstrap system "$PLIST" 2>/dev/null || true; }
+  note "the VPN is off and nothing is blocked"
+}
+
 case "${1:-}" in
   install) shift; do_install "$@" ;;
+  restore-network) do_restore_network ;;
   uninstall) shift; do_uninstall "$@" ;;
-  *) echo "usage: $0 install | uninstall [--yes] [--user NAME] [--keep-profiles] [--keep-logs]" >&2; exit 2 ;;
+  *) echo "usage: $0 install | restore-network | uninstall [--yes] [--user NAME] [--keep-profiles] [--keep-logs]" >&2; exit 2 ;;
 esac

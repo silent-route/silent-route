@@ -159,7 +159,7 @@ public actor Controller {
         let s = status
         for w in watchers.values { w.yield(s) }
         store.save(PersistedState(wantConnected: wantConnected, enginePID: enginePID, pfToken: pfToken,
-                                  bootTime: clock.bootTime()))
+                                  bootTime: clock.bootTime(), bootSession: clock.bootSession()))
     }
 
     private func set(_ p: Phase, error: String? = nil) {
@@ -396,7 +396,7 @@ public actor Controller {
     /// helper, after a reboot, or on first install.
     public func reconcileOnLaunch() async {
         let saved = store.load()
-        let rebooted = saved.map { abs($0.bootTime.timeIntervalSince(clock.bootTime())) > 1 } ?? true
+        let rebooted = saved.map { $0.isFromAnotherBoot(bootTime: clock.bootTime(), bootSession: clock.bootSession()) } ?? true
 
         // An orphaned sing-box from a crashed helper: we can no longer observe
         // it, so it goes. pf (if it was on) keeps blocking meanwhile.
@@ -468,14 +468,46 @@ public actor Controller {
     /// The clash API secret of the running sing-box, for the app's live stats.
     public var currentAPISecret: String? { phase == .connected ? apiSecret : nil }
 
-    /// launchd is stopping the helper (shutdown, reboot, or an update). Leave
-    /// the network clean but remember whether the user wanted the VPN, so an
-    /// update resumes it (behind the kill switch) and a reboot does not.
+    /// launchd is stopping the helper: an update, a shutdown or a restart.
+    ///
+    /// With the VPN on and a kill switch on any route, everything outside the
+    /// tunnel stays blocked: an update must not let traffic out while one
+    /// helper replaces the other, and the next helper resumes the VPN behind
+    /// the same block. sing-box and the DNS change go; pf alone stays. A
+    /// restart of the Mac clears pf, so the network after a reboot is
+    /// pristine all the same, and the installer lifts the block itself if no
+    /// helper comes back.
+    ///
+    /// With the VPN off, or a profile without any kill switch, nothing is
+    /// blocked: the network is left as macOS has it.
     public func shutdownForExit() async {
         epoch += 1
         recovery?.cancel()
         recovery = nil
         let wanted = wantConnected
+        if wanted, profile.protectionMode != .off, let blocked = try? rules(tun: nil) {
+            via = [:]
+            latency = [:]
+            captive = false
+            await network.restoreDNS()
+            do {
+                // Blocked before sing-box goes: no moment of open network.
+                try await pfTry { try await $0.load(blocked) }
+                if pfToken == nil { pfToken = try await pfTry { try await $0.enable() } }
+                if let pid = enginePID {
+                    enginePID = nil
+                    await engine.terminate(pid: pid)
+                }
+                connectedSince = nil
+                apiSecret = nil
+                session(.ended(reason: "the helper stopped (an update or a shutdown); the network stays blocked until the VPN is back"))
+                phase = .off
+                publish()
+                return
+            } catch {
+                // Could not block: better a clean network than a broken one.
+            }
+        }
         await teardown()
         session(.ended(reason: wanted ? "the helper stopped (an update or a shutdown)" : "the helper stopped"))
         wantConnected = wanted
