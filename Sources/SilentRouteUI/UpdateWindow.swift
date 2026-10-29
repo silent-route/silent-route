@@ -48,7 +48,11 @@ public struct UpdateWindowView: View {
         Text("Updating Silent Route").font(.headline)
         Text(stepText).font(.callout).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-        ProgressView().progressViewStyle(.linear)
+        if let f = updater.fraction {
+            ProgressView(value: f).progressViewStyle(.linear)
+        } else {
+            ProgressView().progressViewStyle(.linear)
+        }
         if updater.stage == .helper && model.isOn && !updater.stopping {
             Text("While the helper is replaced, traffic outside the VPN stays blocked. The VPN comes back by itself.")
                 .font(.caption).foregroundStyle(.secondary)

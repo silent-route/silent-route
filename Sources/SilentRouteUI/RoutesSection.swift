@@ -28,7 +28,7 @@ struct RoutesSection: View {
                 Button {
                     let first = profile.tunnels.first.map { [$0.id] } ?? []
                     editing = EditRequest(route: Route(name: "", target: first.isEmpty ? .direct : .servers(first)), isNew: true)
-                } label: { Label("Add Route", systemImage: "plus") }
+                } label: { Label("Add Route…", systemImage: "plus") }
             }
 
             ForEach(Array(profile.routes.enumerated()), id: \.element.id) { i, r in
@@ -148,7 +148,7 @@ struct RouteCard: View {
             }
         }
         .padding(14)
-        .glassCard(cornerRadius: 14)
+        .contentCard()
         .contentShape(.rect(cornerRadius: 14))
         .onTapGesture(count: 2, perform: edit)
         .opacity(route.enabled || isDefault ? 1 : 0.55)

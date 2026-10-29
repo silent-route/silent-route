@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.4-beta
+## 1.3.0-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -58,21 +58,29 @@ All three are off by default and live where they apply. Leave them alone unless 
 - The profiles list is drawn as one rounded group, like the groups in System Settings.
 - Routes can be reordered with the up/down arrows on each route, like the servers inside a route.
 
-### Interface
+### A Mac interface by Apple's guidelines
 
+The whole interface was reworked to follow Apple's Human Interface Guidelines for macOS.
+
+- **The VPN switch is at the top of the sidebar,** with the connection time and speed: the most important control where reading starts, and never at the bottom, which a window moved down can hide.
+- **Toolbars like Apple's apps.** Each page's view switch sits centred in the toolbar — a profile's Routes / Servers / DNS / Network, Monitor's Apps / Connections, Logs' All / Problems — and actions on the trailing side: Add, Export and Settings; Show in Finder and Share for logs. Monitor and Logs filter through a search field in the toolbar, as in Activity Monitor and Console.
+- **Save and Revert are in the toolbar,** Save highlighted, instead of a bar at the bottom of the window. Unsaved changes and anything that stops a save are shown at the top of the page.
+- **A profile's name is the page's title,** large and editable, with its state and number of servers and routes underneath.
+- **Plain grouped sections** for routes, servers and settings, as in System Settings. Liquid Glass stays with the controls and the menu bar panel, where Apple uses it; **Settings › General › Transparency** now sets how see-through the menu bar panel is.
+- **Everything is in the menu bar too:** File › New Profile (⌘N), Import Profile… (⌘O), Export Profile… (⇧⌘E); View › Monitor, Logs, Active Profile (⌘1, ⌘2, ⌘3); VPN › Turn VPN On / Off (⇧⌘T) and Emergency Restore…; Window › Silent Route (⌘0); Help › Silent Route Help.
+- **Settings as toolbar panes** (General, Notifications, Updates, Advanced), the window titled after the open pane, and the last pane you viewed comes back.
 - **Edit… is in each route's ⋯ menu**, *Everything else* included, next to Duplicate and Delete. A double-click on a route opens it too.
 - **Logs are listed as one rounded group**, like the profiles. The session still running is marked with a green dot on the right, as the active profile is.
 - **The Settings button in the toolbar is dimmed while Settings is open** and back to normal once it is closed.
 - **The menu bar panel closes when you switch to another app or another desktop.** It used to stay on screen and could look as if it had opened by itself.
-- **A profile's name is the page's title**, large and editable at the top, with its state and number of servers and routes underneath. The Routes / Servers / DNS / Network switcher sits in the toolbar, centred, as Apple's guidelines for macOS suggest.
-- Section headers use Title Case, as in Apple's apps.
+- Buttons that open another window end in an ellipsis (Add Route…, Install Helper…), and titles use Title Case, as in Apple's apps.
 
 ### Updates that keep you protected
 
 - **With the VPN on, nothing leaks during an update.** Before, the old helper lifted the kill switch when it stopped, so for a few seconds traffic went out directly, and the VPN did not always come back afterwards. Now everything outside the tunnel stays blocked while one helper replaces the other, and the new helper brings the VPN back by itself, through the same profile. With the VPN off, the network is not touched at all.
 - **The VPN comes back after an update.** The helper told a restart of the Mac from a helper restart by the boot time, which macOS shifts when it corrects the clock; a shift of a second was enough to take an update for a reboot and leave the VPN off. It now uses the kernel's boot session id.
 - **The password is asked when you click Install,** not after the relaunch: the helper is updated from the new version first, then the app is replaced and relaunched.
-- **A small window shows the update's progress.** While downloading, **Cancel** stops it with nothing changed. While the helper is replaced with the VPN on, **Cancel…** warns that traffic will no longer be protected, then turns the VPN off so the network goes back to normal. After the relaunch the window stays until the VPN is back, with **Turn VPN Off…** in case it does not come back.
+- **A small window shows the update's progress,** with a filling bar while downloading. While downloading, **Cancel** stops it with nothing changed. While the helper is replaced with the VPN on, **Cancel…** warns that traffic will no longer be protected, then turns the VPN off so the network goes back to normal. After the relaunch the window stays until the VPN is back, with **Turn VPN Off…** in case it does not come back.
 - **If the helper cannot be updated,** the previous one is put back. If no helper starts at all, nothing is unblocked behind your back: the window says what happened and offers **Restore Network** (or restart the Mac).
 
 ### Updates that don't get stuck
@@ -101,7 +109,7 @@ If your copy shows an update it cannot install, quit Silent Route and open it ag
 
 ### Updating
 
-Install the update from the app (Settings › Updates) or from the disk image below. Coming from 1.2.3 or earlier, the update still runs the old way once: after the relaunch, click **Update Helper** if asked. From this version on, the helper is updated before the relaunch, with the VPN kept protected. Profiles and logs are kept.
+Install the update from the app (Settings › Updates) or from the disk image below. Coming from 1.2.3 or earlier, the update still runs the old way once: after the relaunch, click **Update Helper** if asked. From 1.2.4 on, the helper is updated before the relaunch, with the VPN kept protected. Profiles and logs are kept.
 
 ## 1.0.1-beta
 

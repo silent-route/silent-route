@@ -22,10 +22,11 @@ public struct SettingsView: View {
 
     public init(model: AppModel) { self.model = model }
 
-    @State private var pane: Pane = .general
+    /// The pane last viewed comes back next time (Apple's guidelines).
+    @AppStorage("settingsPane") private var pane: Pane = .general
 
-    /// The sections of the sidebar.
-    enum Pane: String, CaseIterable, Identifiable {
+    /// The panes, as tabs in the window's toolbar.
+    enum Pane: String, CaseIterable, Identifiable, Sendable {
         case general, notifications, updates, advanced
         var id: Self { self }
         var title: String {
@@ -47,26 +48,23 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
-        // A sidebar of sections and the chosen one on the right — the
-        // layout of System Settings.
-        NavigationSplitView {
-            List(Pane.allCases, selection: $pane) { p in
-                Label(p.title, systemImage: p.symbol).tag(p)
-            }
-            .navigationSplitViewColumnWidth(200)
-            .toolbar(removing: .sidebarToggle)
-        } detail: {
-            Group {
-                switch pane {
-                case .general: general
-                case .notifications: notificationsTab
-                case .updates: updatesTab
-                case .advanced: advanced
+        // The Mac's settings window: a toolbar of panes that always shows
+        // the one open, and a window title that names it.
+        TabView(selection: $pane) {
+            ForEach(Pane.allCases) { p in
+                Group {
+                    switch p {
+                    case .general: general
+                    case .notifications: notificationsTab
+                    case .updates: updatesTab
+                    case .advanced: advanced
+                    }
                 }
+                .tabItem { Label(p.title, systemImage: p.symbol) }
+                .tag(p)
             }
-            .navigationTitle(pane.title)
         }
-        .frame(width: 720, height: 470)
+        .frame(width: 600, height: 480)
         .sheet(isPresented: $confirmUninstall) { uninstallSheet }
         .onAppear { launchAtLogin = SMAppService.mainApp.status == .enabled }
     }
@@ -90,7 +88,7 @@ public struct SettingsView: View {
                     Text("More").tag(Preferences.Transparency.more)
                 }
                 .pickerStyle(.segmented)
-                Text("How see-through the glass panels are. “More” can make text harder to read on a busy background. If everything looks opaque, check System Settings › Accessibility › Display › Reduce transparency.")
+                Text("How see-through the menu bar panel is. “More” can make text harder to read on a busy background. If everything looks opaque, check System Settings › Accessibility › Display › Reduce transparency.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

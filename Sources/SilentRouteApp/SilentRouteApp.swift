@@ -24,20 +24,62 @@ struct SilentRouteApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { delegate.checkForUpdates() }
             }
+            // File: what the toolbar's Add and Export do.
             CommandGroup(replacing: .newItem) {
-                Button("Show Silent Route Window") { delegate.showMainWindow() }
-                    .keyboardShortcut("0", modifiers: .command)
+                Button("New Profile") { delegate.command(.newProfile) }
+                    .keyboardShortcut("n")
+                Button("Import Profile…") { delegate.command(.importProfile) }
+                    .keyboardShortcut("o")
+                Divider()
+                Button("Export Profile…") { delegate.command(.exportProfile) }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+            }
+            // View: the sidebar's pages.
+            CommandGroup(before: .sidebar) {
+                Button("Monitor") { delegate.command(.showMonitor) }
+                    .keyboardShortcut("1")
+                Button("Logs") { delegate.command(.showLogs) }
+                    .keyboardShortcut("2")
+                Button("Active Profile") { delegate.command(.showActiveProfile) }
+                    .keyboardShortcut("3")
+                Divider()
             }
             CommandMenu("VPN") {
-                Button("Emergency Restore…") { delegate.confirmEmergencyRestore() }
-                    .keyboardShortcut(.delete, modifiers: [.command, .shift])
+                VPNMenu(model: delegate.model)
+            }
+            CommandGroup(before: .windowList) {
+                Button("Silent Route") { delegate.showMainWindow() }
+                    .keyboardShortcut("0")
+                Divider()
+            }
+            CommandGroup(replacing: .help) {
+                Button("Silent Route Help") { delegate.openHelp() }
             }
         }
     }
 }
 
+/// The VPN menu: the switch, with a label that says what it will do.
+private struct VPNMenu: View {
+    let model: AppModel
+
+    var body: some View {
+        Button(model.isOn ? "Turn VPN Off" : "Turn VPN On") {
+            let on = !model.isOn
+            Task { await model.setOn(on) }
+        }
+        .keyboardShortcut("t", modifiers: [.command, .shift])
+        .disabled(!model.switchEnabled || model.busy || model.status.phase == .stopping)
+        Divider()
+        Button("Emergency Restore…") { AppDelegate.shared?.confirmEmergencyRestore() }
+            .keyboardShortcut(.delete, modifiers: [.command, .shift])
+            .disabled(!model.canTurnOff)
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    static weak var shared: AppDelegate?
     let model = AppModel(backend: XPCBackend())
     private var statusItem: NSStatusItem?
     private var panel: StatusPanel?
@@ -48,7 +90,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var pendingOpens: [URL] = []
     private var quitting = false
 
+    /// A menu command for the main window: shown first, so it is there to act.
+    func command(_ c: WindowCommand) {
+        showMainWindow()
+        DispatchQueue.main.async { c.post() }
+    }
+
+    func openHelp() {
+        if let url = Updater.shared.helpPage { NSWorkspace.shared.open(url) }
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
+        Self.shared = self
         // Only valid while the launch event is being handled.
         launchedAtLogin = Self.launchedAsLoginItem
         Preferences.applyAppearance()
@@ -125,6 +178,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             host.sceneBridgingOptions = [.toolbars, .title]
             let w = NSWindow(contentViewController: host)
             w.title = "Silent Route"
+            // Each page shows its own title in its content; the toolbar
+            // keeps its room for the controls (the name stays in the
+            // Window menu and Mission Control).
+            w.titleVisibility = .hidden
             w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             w.setContentSize(NSSize(width: 1000, height: 680))
             w.isReleasedWhenClosed = false

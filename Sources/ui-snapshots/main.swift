@@ -138,6 +138,30 @@ func render<V: View>(_ name: String, size: CGSize? = nil, _ view: V) {
     }
 }
 
+/// A whole window, toolbar included, as the app hosts it.
+@MainActor
+func renderWindow<V: View>(_ name: String, size: CGSize, _ view: V) {
+    for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+        let host = NSHostingController(rootView: view)
+        host.sceneBridgingOptions = [.toolbars, .title]
+        let window = NSWindow(contentViewController: host)
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.appearance = NSAppearance(named: appearance)
+        window.titleVisibility = .hidden
+        window.setContentSize(size)
+        window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+        window.orderFront(nil)
+        for _ in 0..<12 { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        guard let frame = window.contentView?.superview,
+              let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { continue }
+        frame.cacheDisplay(in: frame.bounds, to: rep)
+        let url = out.appendingPathComponent("\(name)-\(suffix).png")
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+        print(url.path)
+        window.orderOut(nil)
+    }
+}
+
 MainActor.assumeIsolated {
     NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -149,6 +173,9 @@ MainActor.assumeIsolated {
     let win = CGSize(width: 1000, height: 700)
     render("window-routes", size: win, MainWindow(model: model(.ready, connected, speed: speed), selection: home.id))
     render("logs", size: CGSize(width: 900, height: 420), LogsView(model: model(.ready, connected), store: sampleLogs()))
+    renderWindow("full-routes", size: win, MainWindow(model: model(.ready, connected, speed: speed), selection: home.id))
+    renderWindow("full-monitor", size: win, MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
+    renderWindow("full-settings", size: CGSize(width: 600, height: 480), SettingsView(model: model(.ready, connected)))
     render("window-monitor", size: win, MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
     for section in [ProfileEditor.Section.servers, .dns, .network] {
         render("editor-\(section)", size: CGSize(width: 760, height: 640),

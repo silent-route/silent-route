@@ -20,12 +20,12 @@ struct MonitorView: View {
     var body: some View {
         Group {
             if model.otherUsersVPN {
-                ContentUnavailableView("Another user's VPN", systemImage: "person.2",
+                ContentUnavailableView("Another User's VPN", systemImage: "person.2",
                                        description: Text("Another user of this Mac turned the VPN on. Its traffic is shown only to them."))
             } else if model.status.phase == .connected || !monitor.connections.isEmpty {
                 content
             } else {
-                ContentUnavailableView("Not connected", systemImage: "chart.xyaxis.line",
+                ContentUnavailableView("Not Connected", systemImage: "chart.xyaxis.line",
                                        description: Text("Turn the VPN on to see live traffic: which apps talk to which sites, by which route and server."))
             }
         }
@@ -38,24 +38,12 @@ struct MonitorView: View {
                 stat("Download", Format.speed(monitor.current?.down ?? 0), "arrow.down", .blue)
                 stat("Upload", Format.speed(monitor.current?.up ?? 0), "arrow.up", .orange)
                 stat("Connections", "\(monitor.connections.count)", "link", .secondary)
-                stat("This session", "↓ \(Format.bytes(monitor.downloadTotal))  ↑ \(Format.bytes(monitor.uploadTotal))", "sum", .secondary)
+                stat("This Session", "↓ \(Format.bytes(monitor.downloadTotal))  ↑ \(Format.bytes(monitor.uploadTotal))", "sum", .secondary)
             }
             chart
                 .frame(height: 140)
                 .padding(14)
-                .glassCard(cornerRadius: 14)
-            HStack {
-                Picker("", selection: $view) {
-                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                Spacer()
-                TextField("", text: $search, prompt: Text("Filter by app, site, route or server"))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 260)
-            }
+                .contentCard()
             if let p = monitor.problem {
                 Label(p, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
             }
@@ -68,9 +56,23 @@ struct MonitorView: View {
             // The table draws its own square header and rows: clip them to
             // the card's rounded shape.
             .clipShape(.rect(cornerRadius: 14))
-            .glassCard(cornerRadius: 14)
+            .contentCard()
         }
         .padding(20)
+        // As in Activity Monitor: the view switch and the search field in
+        // the toolbar.
+        .searchable(text: $search, placement: .toolbar, prompt: "Filter")
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("View", selection: $view) {
+                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Traffic by app, or each connection")
+            }
+        }
     }
 
     private func stat(_ title: String, _ value: String, _ symbol: String, _ color: Color) -> some View {
@@ -80,7 +82,7 @@ struct MonitorView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .glassCard(cornerRadius: 12)
+        .contentCard()
     }
 
     private var chart: some View {

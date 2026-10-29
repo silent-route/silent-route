@@ -41,6 +41,7 @@ struct ProfileEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     header
+                    if dirty || saveError != nil { changesNotice }
                     Group {
                         switch section {
                         case .routes: RoutesSection(profile: $draft, liveServers: running ? model.status.servers : [],
@@ -55,18 +56,32 @@ struct ProfileEditor: View {
                 .frame(maxWidth: 780, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            if dirty || saveError != nil { saveBar }
         }
         .onChange(of: saved) { old, new in
             // Changed elsewhere (menu bar, CLI): follow it unless mid-edit.
             if draft == old { draft = new }
         }
         .background {
-            Button("") { Task { await save() } }.keyboardShortcut("s").hidden().disabled(!dirty)
+            Button("") { Task { await save() } }.keyboardShortcut("s").hidden().disabled(!dirty || !canSave)
         }
         .toolbar {
             // Switching views of the main area: a segmented control in the
             // toolbar, centred (Apple's guidelines for macOS).
+            // Save and Revert on the trailing side, Save prominent: Apple's
+            // place for a key action (never a bar at the bottom, which a
+            // window moved down can hide).
+            if dirty {
+                ToolbarItem(placement: .automatic) {
+                    Button("Revert") { draft = saved; saveError = nil }
+                        .help("Discard the unsaved changes")
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button("Save") { Task { await save() } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.busy || !canSave)
+                        .help(canSave ? "Save the changes (⌘S)" : "This profile is in use: fix the errors first")
+                }
+            }
             ToolbarItem(placement: .principal) {
                 Picker("Section", selection: $section) {
                     ForEach(Section.allCases) { s in Text(s.rawValue).tag(s) }
@@ -122,37 +137,37 @@ struct ProfileEditor: View {
             })
         return TextField("Name", text: text, prompt: Text(placeholder))
             .textFieldStyle(.plain)
-            .font(.system(size: 26, weight: .bold))
+            .font(.largeTitle.weight(.bold))
             .frame(maxWidth: 480, alignment: .leading)
             .help("The profile’s name, as the menu bar and the list show it — click to rename")
     }
 
-    private var saveBar: some View {
-        let errors = issues.filter { $0.severity == .error }
-        let mustBeValid = isActive && model.status.phase != .off
-        return VStack(alignment: .leading, spacing: 8) {
+    private var errors: [Validation.Issue] { issues.filter { $0.severity == .error } }
+    /// The running profile must stay valid; others may be saved half-done.
+    private var mustBeValid: Bool { isActive && model.status.phase != .off }
+    private var canSave: Bool { !(mustBeValid && !errors.isEmpty) }
+
+    /// What is unsaved and what stops it from saving, at the top where it
+    /// is read first.
+    private var changesNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
             if let saveError {
-                Label(Text.sentence(saveError), systemImage: "xmark.octagon.fill").foregroundStyle(.red).font(.callout)
+                Label(Text.sentence(saveError), systemImage: "xmark.octagon.fill").foregroundStyle(.red)
             }
             ForEach(errors, id: \.self) { i in
-                Label(Text.sentence(i.message), systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
+                Label(Text.sentence(i.message), systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             }
-            HStack {
-                Text(mustBeValid && !errors.isEmpty
-                     ? "This profile is in use: it can only be saved without errors"
-                     : "Unsaved changes")
+            if dirty {
+                Text(canSave ? "Unsaved changes — Save is in the toolbar (⌘S)."
+                             : "This profile is in use: it can only be saved without errors.")
                     .foregroundStyle(.secondary)
-                Spacer()
-                Button("Revert") { draft = saved; saveError = nil }
-                Button("Save") { Task { await save() } }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.busy || (mustBeValid && !errors.isEmpty))
             }
         }
+        .font(.callout)
+        .textSelection(.enabled)
         .padding(12)
-        .glassCard(cornerRadius: 14)
-        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentCard(cornerRadius: 12)
     }
 
     private func save() async {
@@ -178,7 +193,7 @@ struct Card<Content: View>: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard(cornerRadius: 14)
+        .contentCard()
     }
 }
 

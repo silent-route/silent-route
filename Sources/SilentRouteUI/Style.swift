@@ -2,27 +2,14 @@ import SwiftUI
 import VPNCore
 
 extension View {
-    /// Liquid Glass on macOS 26; the closest material look on 14–15. More
-    /// see-through when the user chose so in Settings.
-    func glassCard(cornerRadius: CGFloat = 16) -> some View {
-        modifier(GlassCard(cornerRadius: cornerRadius))
-    }
-}
-
-private struct GlassCard: ViewModifier {
-    let cornerRadius: CGFloat
-    @AppStorage(Preferences.transparencyKey) private var transparency = Preferences.Transparency.standard
-
-    func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            content.glassEffect(transparency == .more ? .clear : .regular, in: .rect(cornerRadius: cornerRadius))
-        } else if transparency == .more {
-            content.background(.ultraThinMaterial, in: .rect(cornerRadius: cornerRadius))
-                .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
-        } else {
-            content.background(.regularMaterial, in: .rect(cornerRadius: cornerRadius))
-                .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
-        }
+    /// A group in the content layer, drawn as System Settings draws its
+    /// grouped sections: a light fill and a hairline. Liquid Glass belongs
+    /// to the controls and navigation above the content, never to the
+    /// content itself (Apple's Human Interface Guidelines, Materials).
+    func contentCard(cornerRadius: CGFloat = 12) -> some View {
+        background(Color.primary.opacity(0.035), in: .rect(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
     }
 }
 

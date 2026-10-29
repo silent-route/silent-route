@@ -37,7 +37,7 @@ struct LogsView: View {
     private var sessionList: some View {
         Group {
             if loaded && sessions.isEmpty {
-                ContentUnavailableView("No sessions yet", systemImage: "doc.text",
+                ContentUnavailableView("No Sessions Yet", systemImage: "doc.text",
                                        description: Text("Each time you turn the VPN on, its session is logged here and in ~/Library/Logs/Silent Route. The last 30 are kept, and only you can see yours — other users of this Mac see only their own."))
             } else {
                 // One rounded group, like the profiles in the sidebar.
@@ -56,9 +56,19 @@ struct LogsView: View {
     // MARK: Text
 
     private var content: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Picker("", selection: $problemsOnly) {
+        Group {
+            if selected == nil {
+                ContentUnavailableView("Choose a Session", systemImage: "doc.text.magnifyingglass")
+            } else {
+                LogTextView(text: shown)
+            }
+        }
+        // As in Console: the filters and actions in the toolbar, the search
+        // field on its trailing side.
+        .searchable(text: $search, placement: .toolbar, prompt: "Filter")
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Show", selection: $problemsOnly) {
                     Text("All").tag(false)
                     Text("Problems").tag(true)
                 }
@@ -66,10 +76,8 @@ struct LogsView: View {
                 .labelsHidden()
                 .fixedSize()
                 .help("Problems: errors, warnings, reconnects and failovers")
-                TextField("", text: $search, prompt: Text("Filter"))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 220)
-                Spacer()
+            }
+            ToolbarItem(placement: .automatic) {
                 Button {
                     let target = selected.flatMap(store.url(of:)) ?? store.folder ?? store.base
                     NSWorkspace.shared.activateFileViewerSelecting([target])
@@ -77,6 +85,8 @@ struct LogsView: View {
                     Label("Show in Finder", systemImage: "folder")
                 }
                 .help("Your logs are files in ~/Library/Logs/Silent Route — only you can open them")
+            }
+            ToolbarItem(placement: .automatic) {
                 Menu {
                     Button("Copy") { copy(redacted: false) }
                     Button("Copy Without Addresses") { copy(redacted: true) }
@@ -86,16 +96,8 @@ struct LogsView: View {
                 } label: {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
-                .fixedSize()
                 .disabled(text.isEmpty)
                 .help("“Without addresses” hides IP addresses, host names and the names of your profiles, routes and servers — for sharing a log safely")
-            }
-            .padding(10)
-            Divider()
-            if selected == nil {
-                ContentUnavailableView("Choose a session", systemImage: "doc.text.magnifyingglass")
-            } else {
-                LogTextView(text: shown)
             }
         }
     }

@@ -1,4 +1,5 @@
 import AppKit
+import SilentRouteUI
 import SwiftUI
 
 /// The menu bar panel, placed the way macOS places its own (Wi-Fi, Control
@@ -54,6 +55,7 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
         guard let bw = button.window else { return }
         self.button = button
         anchor = bw.convertToScreen(button.convert(button.bounds, to: nil))
+        applyTransparency()
         place()
         makeKeyAndOrderFront(nil)
         button.highlight(true)
@@ -146,6 +148,15 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) { dismiss() }
 
     // MARK: Background
+
+    /// Settings › General › Transparency: the clear variant of Liquid Glass
+    /// for "More" — the panel floats over the desktop, which is where Apple
+    /// allows it.
+    private func applyTransparency() {
+        if #available(macOS 26, *), let glass = contentView as? NSGlassEffectView {
+            glass.style = Preferences.transparency == .more ? .clear : .regular
+        }
+    }
 
     /// Liquid Glass on macOS 26; the menu material with rounded corners on 14–15.
     private static func background(around content: NSView) -> NSView {

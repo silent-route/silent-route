@@ -46,6 +46,8 @@ public final class Updater {
     /// Set while quitting into a new version: the quit must not turn the
     /// VPN off (the new app reconnects it after updating the helper).
     public private(set) var relaunching = false
+    /// How much of the download is done (0…1) while downloading.
+    public private(set) var fraction: Double?
     /// The step under way while installing, for the progress window.
     public private(set) var stage: Stage?
     /// Stop was asked for while the helper was being replaced: the VPN is
@@ -95,6 +97,11 @@ public final class Updater {
 
     public var available: Release? {
         if case .available(let r) = state { r } else { nil }
+    }
+
+    /// The project's documentation (its README).
+    public var helpPage: URL? {
+        repository.flatMap { URL(string: "https://github.com/\($0)#readme") }
     }
 
     public var releasesPage: URL? {
@@ -344,9 +351,11 @@ public final class Updater {
     private func download(_ release: Release, into work: URL, named name: String) async throws -> URL {
         let fm = FileManager.default
         let image = work.appendingPathComponent(release.image.lastPathComponent)
-        let (tmp, resp) = try await URLSession.shared.download(from: release.image)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw Failure("the download failed") }
-        try fm.moveItem(at: tmp, to: image)
+        fraction = 0
+        defer { fraction = nil }
+        try await Download.run(release.image, to: image) { f in
+            Task { @MainActor in if self.fraction != nil { self.fraction = f } }
+        }
         let (sumData, _) = try await URLSession.shared.data(from: release.checksum)
         let want = String(decoding: sumData, as: UTF8.self).split(separator: " ").first.map(String.init)?
             .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -413,5 +422,53 @@ public final class Updater {
         let message: String
         init(_ m: String) { message = m }
         var errorDescription: String? { message }
+    }
+}
+
+/// One file, with its progress reported as it arrives.
+private final class Download: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let destination: URL
+    private let progress: @Sendable (Double) -> Void
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var moveError: Error?
+
+    private init(destination: URL, progress: @escaping @Sendable (Double) -> Void) {
+        self.destination = destination
+        self.progress = progress
+    }
+
+    static func run(_ url: URL, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+        let d = Download(destination: destination, progress: progress)
+        let session = URLSession(configuration: .default, delegate: d, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        let task = session.downloadTask(with: url)
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                d.continuation = c
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        progress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        // The file is gone once this returns: move it now.
+        guard (downloadTask.response as? HTTPURLResponse)?.statusCode == 200 else {
+            moveError = Updater.Failure("the download failed")
+            return
+        }
+        do { try FileManager.default.moveItem(at: location, to: destination) } catch { moveError = error }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let e = error ?? moveError { continuation?.resume(throwing: e) } else { continuation?.resume() }
+        continuation = nil
     }
 }

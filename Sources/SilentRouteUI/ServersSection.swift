@@ -47,12 +47,12 @@ struct ServersSection: View {
             if profile.tunnels.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "server.rack").font(.largeTitle).foregroundStyle(.tertiary)
-                    Text("No servers yet").font(.headline)
+                    Text("No Servers Yet").font(.headline)
                     Text("Add a tunnel or a proxy — by its link or field by field.").foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(30)
-                .glassCard()
+                .contentCard()
             } else {
                 VStack(spacing: 0) {
                     ForEach(profile.tunnels) { t in
@@ -62,7 +62,7 @@ struct ServersSection: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 4)
-                .glassCard(cornerRadius: 14)
+                .contentCard()
             }
         }
         .sheet(item: $editing) { req in

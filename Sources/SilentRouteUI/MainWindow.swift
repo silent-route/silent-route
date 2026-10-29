@@ -41,9 +41,9 @@ public struct MainWindow: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 300)
         } detail: {
-            detail
+            // On the detail column, so they sit on its trailing side.
+            detail.toolbar { toolbar }
         }
-        .toolbar { toolbar }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.silentRouteProfile, .json],
                       allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
@@ -79,6 +79,9 @@ public struct MainWindow: View {
             if case .profile(let s) = selection, ids.contains(s) { return }
             if selection == .monitor || selection == .logs { return }
             selection = (model.library.activeID ?? ids.first).map(Item.profile)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WindowCommand.notification)) { note in
+            if let c = (note.object as? String).flatMap(WindowCommand.init(rawValue:)) { perform(c) }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in updateSettingsOpen() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in updateSettingsOpen() }
@@ -136,7 +139,9 @@ public struct MainWindow: View {
             guard items.count == 1, case .profile(let id)? = items.first, id != model.library.activeID else { return }
             Task { await model.activate(id) }
         }
-        .safeAreaInset(edge: .bottom) { ConnectionFooter(model: model).padding(10) }
+        // At the top: the switch is the most important control, and the
+        // bottom of a sidebar is where a window moved down hides things.
+        .safeAreaInset(edge: .top) { ConnectionCard(model: model).padding(.horizontal, 10).padding(.bottom, 6) }
     }
 
     @ViewBuilder
@@ -178,22 +183,34 @@ public struct MainWindow: View {
     }
 
     private var noSelection: some View {
-        ContentUnavailableView("No profile selected", systemImage: "globe",
+        ContentUnavailableView("No Profile Selected", systemImage: "globe",
                                description: Text("Create one with +, or import a .srprofile file: choose it, drop it here, or paste it with ⌘V."))
     }
 
+    /// All on the trailing side, Apple's place for actions: the leading
+    /// edge is for the sidebar button and the title. Each one is also in
+    /// the menu bar (File, and the app menu for Settings).
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
+        ToolbarItem(placement: .automatic) {
             Menu {
-                Button("New Profile") { Task { if let id = await model.newProfile() { selection = .profile(id) } } }
+                Button("New Profile") { newProfile() }
                 Button("Import Profile…") { importing = true }
             } label: {
                 Label("Add", systemImage: "plus")
             }
             .disabled(model.helper != .ready)
+            .help("New profile, or import one from a file")
         }
-        ToolbarItem(placement: .primaryAction) {
+        ToolbarItem(placement: .automatic) {
+            if let id = selectedProfile, let p = model.library.profile(id) {
+                Button { exporting = ProfileDocument(profile: p) } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .help("Save this profile to a .srprofile file")
+            }
+        }
+        ToolbarItem(placement: .automatic) {
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")
             }
@@ -202,13 +219,23 @@ public struct MainWindow: View {
             .opacity(settingsOpen ? 0.45 : 1)
             .help("Settings (⌘,)")
         }
-        ToolbarItem(placement: .primaryAction) {
-            if let id = selectedProfile, let p = model.library.profile(id) {
-                Button { exporting = ProfileDocument(profile: p) } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
-                }
-                .help("Save this profile to a .srprofile file")
-            }
+    }
+
+    private func newProfile() {
+        Task { if let id = await model.newProfile() { selection = .profile(id) } }
+    }
+
+    /// Menu bar commands (File, View) for this window.
+    private func perform(_ command: WindowCommand) {
+        switch command {
+        case .newProfile: if model.helper == .ready { newProfile() }
+        case .importProfile: if model.helper == .ready { importing = true }
+        case .exportProfile:
+            if let id = selectedProfile, let p = model.library.profile(id) { exporting = ProfileDocument(profile: p) }
+        case .showMonitor: selection = .monitor
+        case .showLogs: selection = .logs
+        case .showActiveProfile:
+            if let id = model.library.activeID { selection = .profile(id) }
         }
     }
 
@@ -219,7 +246,8 @@ public struct MainWindow: View {
             .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [8, 6]))
             .background(Color.accentColor.opacity(0.06), in: .rect(cornerRadius: 14))
             .overlay(Label("Drop to import the profile", systemImage: "square.and.arrow.down")
-                .font(.title3).padding().glassCard())
+                .font(.title3).padding()
+                .background(.regularMaterial, in: .rect(cornerRadius: 12)))
             .padding(8)
             .allowsHitTesting(false)
     }
@@ -291,8 +319,8 @@ struct ProfileRow: View {
     }
 }
 
-/// Connection state and the switch, under the sidebar.
-struct ConnectionFooter: View {
+/// Connection state and the switch, at the top of the sidebar.
+struct ConnectionCard: View {
     let model: AppModel
 
     var body: some View {
@@ -350,7 +378,7 @@ struct ConnectionFooter: View {
             }
         }
         .padding(10)
-        .glassCard(cornerRadius: 12)
+        .contentCard(cornerRadius: 10)
     }
 }
 
@@ -379,7 +407,8 @@ struct HelperSetupView: View {
             Button {
                 Task { await model.installHelper() }
             } label: {
-                Text(model.helper == .notInstalled ? "Install Helper" : model.helperOutdated ? "Update Helper" : "Reinstall Helper")
+                // The ellipsis: macOS asks for a password in another window.
+                Text(model.helper == .notInstalled ? "Install Helper…" : model.helperOutdated ? "Update Helper…" : "Reinstall Helper…")
                     .padding(.horizontal, 8)
             }
             .controlSize(.large)
@@ -389,8 +418,6 @@ struct HelperSetupView: View {
                 Text(n.text).font(.callout).foregroundStyle(n.isError ? .red : .secondary)
             }
         }
-        .padding(32)
-        .glassCard(cornerRadius: 22)
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -413,6 +440,17 @@ struct ProfileDocument: FileDocument {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         return FileWrapper(regularFileWithContents: try enc.encode(profile))
+    }
+}
+
+/// Commands from the menu bar that act on the main window.
+public enum WindowCommand: String, Sendable {
+    case newProfile, importProfile, exportProfile, showMonitor, showLogs, showActiveProfile
+
+    public static let notification = Notification.Name("SilentRouteWindowCommand")
+
+    @MainActor public func post() {
+        NotificationCenter.default.post(name: Self.notification, object: rawValue)
     }
 }
 
