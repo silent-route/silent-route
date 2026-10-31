@@ -99,8 +99,14 @@ final class TrafficMonitor {
         defaultRouteName = p.defaultRoute.name
     }
 
+    /// The chart's window: the last two minutes, always this wide.
+    static let window: TimeInterval = 120
+
     func start(credentials: @escaping @Sendable () async -> IPC.APICredentials?) {
         guard task == nil else { return }
+        // Nothing was measured while nobody looked: a line from before the
+        // gap to now would be made up. Start the chart afresh.
+        if let t = samples.last?.time, Date().timeIntervalSince(t) > 3 { samples = [] }
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -175,10 +181,12 @@ final class TrafficMonitor {
             }
             list.append(conn)
         }
-        if let last {
-            samples.append(Sample(time: now, down: Int64(Double(max(0, down - last.down)) / dt),
-                                  up: Int64(Double(max(0, up - last.up)) / dt)))
-            samples.removeAll { now.timeIntervalSince($0.time) > 120 }
+        // Totals that went down: sing-box restarted (a reconnect) and counts
+        // from zero again. That is a new baseline, not a drop to nothing.
+        if let last, down >= last.down, up >= last.up {
+            samples.append(Sample(time: now, down: Int64(Double(down - last.down) / dt),
+                                  up: Int64(Double(up - last.up) / dt)))
+            samples.removeAll { now.timeIntervalSince($0.time) > Self.window }
         }
         last = (now, down, up, perConn)
         downloadTotal = down

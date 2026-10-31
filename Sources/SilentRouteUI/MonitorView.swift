@@ -32,20 +32,16 @@ struct MonitorView: View {
         .navigationTitle("Monitor")
     }
 
+    /// Laid out as Activity Monitor's Network tab: the list, edge to edge,
+    /// takes the window; the totals and the chart sit in a panel below.
     private var content: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 14) {
-                stat("Download", Format.speed(monitor.current?.down ?? 0), "arrow.down", .blue)
-                stat("Upload", Format.speed(monitor.current?.up ?? 0), "arrow.up", .orange)
-                stat("Connections", "\(monitor.connections.count)", "link", .secondary)
-                stat("This Session", "↓ \(Format.bytes(monitor.downloadTotal))  ↑ \(Format.bytes(monitor.uploadTotal))", "sum", .secondary)
-            }
-            chart
-                .frame(height: 140)
-                .padding(14)
-                .contentCard()
+        VStack(spacing: 0) {
             if let p = monitor.problem {
-                Label(p, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+                Label(p, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                Divider()
             }
             Group {
                 switch view {
@@ -53,14 +49,11 @@ struct MonitorView: View {
                 case .connections: connectionsTable
                 }
             }
-            // The table draws its own square header and rows: clip them to
-            // the card's rounded shape.
-            .clipShape(.rect(cornerRadius: 14))
-            .contentCard()
+            .tableStyle(.inset(alternatesRowBackgrounds: true))
+            Divider()
+            summary
         }
-        .padding(20)
-        // As in Activity Monitor: the view switch and the search field in
-        // the toolbar.
+        // The view switch and the search field in the toolbar, as there.
         .searchable(text: $search, placement: .toolbar, prompt: "Filter")
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -75,27 +68,57 @@ struct MonitorView: View {
         }
     }
 
-    private func stat(_ title: String, _ value: String, _ symbol: String, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: symbol).font(.caption).foregroundStyle(color == .secondary ? Color.secondary : color)
-            Text(value).font(.title3.weight(.semibold).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
+    /// The figures in a column of label and value, the chart beside them in
+    /// a thin frame — larger than Activity Monitor's, since here it is the
+    /// main way to see the connection at a glance.
+    private var summary: some View {
+        HStack(alignment: .center, spacing: 24) {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                figure("Download:", Format.speed(monitor.current?.down ?? 0), .blue)
+                figure("Upload:", Format.speed(monitor.current?.up ?? 0), .orange)
+                figure("Connections:", "\(monitor.connections.count)")
+                Divider().gridCellUnsizedAxes(.horizontal)
+                figure("Data received:", Format.bytes(monitor.downloadTotal))
+                figure("Data sent:", Format.bytes(monitor.uploadTotal))
+            }
+            .font(.callout)
+            .fixedSize()
+            chart
+                .frame(height: 170)
+                .padding(10)
+                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .contentCard()
+        .padding(16)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
+    private func figure(_ label: String, _ value: String, _ color: Color? = nil) -> some View {
+        GridRow {
+            Text(label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+            Text(value).monospacedDigit().foregroundStyle(color ?? .primary).gridColumnAlignment(.trailing)
+                .frame(minWidth: 90, alignment: .trailing)
+        }
+    }
+
+    /// Always the last two minutes, filling in from the right as data
+    /// arrives (as in Activity Monitor) — never a few points stretched
+    /// across the whole width.
     private var chart: some View {
-        Chart {
+        let end = monitor.samples.last?.time ?? .now
+        return Chart {
             ForEach(monitor.samples) { s in
                 AreaMark(x: .value("Time", s.time), y: .value("Speed", s.down), series: .value("Direction", "Download"))
                     .foregroundStyle(.blue.opacity(0.25))
+                    .interpolationMethod(.monotone)
                 LineMark(x: .value("Time", s.time), y: .value("Speed", s.down), series: .value("Direction", "Download"))
                     .foregroundStyle(.blue)
+                    .interpolationMethod(.monotone)
                 LineMark(x: .value("Time", s.time), y: .value("Speed", s.up), series: .value("Direction", "Upload"))
                     .foregroundStyle(.orange)
+                    .interpolationMethod(.monotone)
             }
         }
+        .chartXScale(domain: end.addingTimeInterval(-TrafficMonitor.window)...end)
         .chartYAxis {
             AxisMarks(position: .leading) { v in
                 AxisGridLine()
@@ -131,7 +154,6 @@ struct MonitorView: View {
             TableColumn("Received") { a in Text(Format.bytes(a.download)).monospacedDigit().foregroundStyle(.secondary) }.width(80)
             TableColumn("Sent") { a in Text(Format.bytes(a.upload)).monospacedDigit().foregroundStyle(.secondary) }.width(80)
         }
-        .scrollContentBackground(.hidden)
     }
 
     private var connectionsTable: some View {
@@ -181,7 +203,6 @@ struct MonitorView: View {
                 for id in ids { monitor.close(id) }
             }
         }
-        .scrollContentBackground(.hidden)
     }
 }
 

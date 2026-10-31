@@ -130,7 +130,16 @@ public actor Controller {
         self.network = network
         self.store = store
         self.clock = clock
+        // Read before anything can write: every transition saves the state,
+        // and loading the owner's profile at start-up (before
+        // `reconcileOnLaunch`) is one. Read later, the previous helper's
+        // "the VPN was on" would already be overwritten — and the VPN would
+        // not come back after an update.
+        savedAtLaunch = store.load()
     }
+
+    /// What the previous helper left, as it was when this one started.
+    private let savedAtLaunch: PersistedState?
 
     // MARK: - Status
 
@@ -395,7 +404,7 @@ public actor Controller {
     /// Reconcile with reality when the helper (re)starts: after a crash of the
     /// helper, after a reboot, or on first install.
     public func reconcileOnLaunch() async {
-        let saved = store.load()
+        let saved = savedAtLaunch
         let rebooted = saved.map { $0.isFromAnotherBoot(bootTime: clock.bootTime(), bootSession: clock.bootSession()) } ?? true
 
         // An orphaned sing-box from a crashed helper: we can no longer observe

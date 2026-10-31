@@ -85,6 +85,10 @@ public struct MainWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in updateSettingsOpen() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in updateSettingsOpen() }
+        // Settings is ordered out rather than closed, and its key and
+        // occlusion changes arrive while it is still on screen: look again
+        // once each change has settled.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { _ in updateSettingsOpen() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { note in
             updateSettingsOpen(closing: note.object as? NSWindow)
         }
@@ -100,8 +104,16 @@ public struct MainWindow: View {
 
     /// SwiftUI's Settings window, by the identifier it gives it.
     private func updateSettingsOpen(closing: NSWindow? = nil) {
-        settingsOpen = NSApp.windows.contains { w in
-            w !== closing && w.isVisible && (w.identifier?.rawValue.contains("Settings") ?? false)
+        settingsOpen = Self.settingsVisible(except: closing)
+        for delay in [0.05, 0.3] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { settingsOpen = Self.settingsVisible() }
+        }
+    }
+
+    private static func settingsVisible(except closing: NSWindow? = nil) -> Bool {
+        NSApp.windows.contains { w in
+            w !== closing && w.isVisible && w.occlusionState.contains(.visible)
+                && (w.identifier?.rawValue.contains("Settings") ?? false)
         }
     }
 
@@ -112,13 +124,12 @@ public struct MainWindow: View {
             Label("Monitor", systemImage: "chart.xyaxis.line").tag(Item.monitor)
             Label("Logs", systemImage: "doc.text").tag(Item.logs)
             Section("Profiles") {
-                let count = model.library.profiles.count
-                ForEach(Array(model.library.profiles.enumerated()), id: \.element.id) { i, p in
+                // The standard sidebar look, as in Finder, Mail and Notes:
+                // the system's own selection, no card around the rows.
+                ForEach(model.library.profiles) { p in
                     ProfileRow(profile: p, isActive: p.id == model.library.activeID,
                                status: model.otherUsersVPN ? VPNStatus(phase: .off) : model.status)
                         .tag(Item.profile(p.id))
-                        // One rounded group, like a group in System Settings.
-                        .listRowBackground(GroupedRowBackground(isFirst: i == 0, isLast: i == count - 1))
                         .help(p.id == model.library.activeID ? "Active profile"
                                                              : "Press Return or double-click to make this profile active")
                 }
@@ -269,28 +280,6 @@ public struct MainWindow: View {
         } else if let text = pb.string(forType: .string) {
             Task { if let id = await model.importProfileText(text) { selection = .profile(id) } }
         }
-    }
-}
-
-/// A row's share of a rounded group, as System Settings draws its groups
-/// (General › About, Software Update, Storage): one filled shape with rounded
-/// outer corners, and hairlines between rows that start after the icon.
-struct GroupedRowBackground: View {
-    let isFirst: Bool
-    let isLast: Bool
-    private let radius: CGFloat = 10
-
-    var body: some View {
-        UnevenRoundedRectangle(topLeadingRadius: isFirst ? radius : 0, bottomLeadingRadius: isLast ? radius : 0,
-                               bottomTrailingRadius: isLast ? radius : 0, topTrailingRadius: isFirst ? radius : 0,
-                               style: .continuous)
-            .fill(Color.primary.opacity(0.05))
-            .overlay(alignment: .bottom) {
-                if !isLast {
-                    Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5).padding(.leading, 38)
-                }
-            }
-            .padding(.horizontal, 10)
     }
 }
 

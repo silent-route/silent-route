@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.0-beta
+## 1.3.2-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -55,7 +55,6 @@ All three are off by default and live where they apply. Leave them alone unless 
 ### Improved
 
 - **Fewer dropped connections on network changes.** A Wi-Fi switch or waking from sleep no longer restarts sing-box at once: the helper checks the servers every 2 seconds and restarts only after 12 seconds without any answer. Short drops pass without breaking calls, downloads or open pages. Routes with a kill switch stay blocked meanwhile, as before.
-- The profiles list is drawn as one rounded group, like the groups in System Settings.
 - Routes can be reordered with the up/down arrows on each route, like the servers inside a route.
 
 ### A Mac interface by Apple's guidelines
@@ -70,15 +69,16 @@ The whole interface was reworked to follow Apple's Human Interface Guidelines fo
 - **Everything is in the menu bar too:** File › New Profile (⌘N), Import Profile… (⌘O), Export Profile… (⇧⌘E); View › Monitor, Logs, Active Profile (⌘1, ⌘2, ⌘3); VPN › Turn VPN On / Off (⇧⌘T) and Emergency Restore…; Window › Silent Route (⌘0); Help › Silent Route Help.
 - **Settings as toolbar panes** (General, Notifications, Updates, Advanced), the window titled after the open pane, and the last pane you viewed comes back.
 - **Edit… is in each route's ⋯ menu**, *Everything else* included, next to Duplicate and Delete. A double-click on a route opens it too.
-- **Logs are listed as one rounded group**, like the profiles. The session still running is marked with a green dot on the right, as the active profile is.
-- **The Settings button in the toolbar is dimmed while Settings is open** and back to normal once it is closed.
+- **The profiles and the logs are plain lists with the system's own selection,** as in Finder, Mail and Notes. The session still running is marked with a green dot on the right, as the active profile is.
+- **Monitor is laid out like Activity Monitor's Network tab:** the list of apps or connections takes the window, edge to edge; below it, the figures (download, upload, connections, data received and sent) and a chart of the last two minutes in a thin frame — larger than Activity Monitor's. The chart always shows those two minutes and fills in from the right as data arrives, starts afresh after the page was closed, and a reconnect no longer shows as a fall to zero.
+- **The Settings button in the toolbar is dimmed while Settings is open** and back to normal as soon as it is closed.
 - **The menu bar panel closes when you switch to another app or another desktop.** It used to stay on screen and could look as if it had opened by itself.
 - Buttons that open another window end in an ellipsis (Add Route…, Install Helper…), and titles use Title Case, as in Apple's apps.
 
 ### Updates that keep you protected
 
 - **With the VPN on, nothing leaks during an update.** Before, the old helper lifted the kill switch when it stopped, so for a few seconds traffic went out directly, and the VPN did not always come back afterwards. Now everything outside the tunnel stays blocked while one helper replaces the other, and the new helper brings the VPN back by itself, through the same profile. With the VPN off, the network is not touched at all.
-- **The VPN comes back after an update.** The helper told a restart of the Mac from a helper restart by the boot time, which macOS shifts when it corrects the clock; a shift of a second was enough to take an update for a reboot and leave the VPN off. It now uses the kernel's boot session id.
+- **The VPN comes back after an update.** The new helper loaded your profile before checking whether the VPN had been on — and loading it saved the state, so it read back its own "off" instead of what the previous helper had left. The VPN stayed off and the block was lifted. The state is now read before anything can write it. Telling a restart of the Mac from a helper restart also uses the kernel's boot session id now, instead of the boot time macOS shifts when it corrects the clock.
 - **The password is asked when you click Install,** not after the relaunch: the helper is updated from the new version first, then the app is replaced and relaunched.
 - **A small window shows the update's progress,** with a filling bar while downloading. While downloading, **Cancel** stops it with nothing changed. While the helper is replaced with the VPN on, **Cancel…** warns that traffic will no longer be protected, then turns the VPN off so the network goes back to normal. After the relaunch the window stays until the VPN is back, with **Turn VPN Off…** in case it does not come back.
 - **If the helper cannot be updated,** the previous one is put back. If no helper starts at all, nothing is unblocked behind your back: the window says what happened and offers **Restore Network** (or restart the Mac).

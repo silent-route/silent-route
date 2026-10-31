@@ -612,6 +612,19 @@ import Testing
         #expect(await next.world.tokens == [saved!.pfToken!])
     }
 
+    /// The helper loads its owner's profile before reconciling, and that
+    /// saves the state: the previous helper's "the VPN was on" must still
+    /// decide (found when an update did not bring the VPN back).
+    @Test func profileLoadedBeforeReconcileStillResumes() async throws {
+        let boot = Date(timeIntervalSince1970: 500_000)
+        let h = Harness(saved: PersistedState(wantConnected: true, pfToken: "T9", bootTime: boot), boot: boot)
+        await h.world.set { w in w.tokens = ["T9"]; w.anchorRules = "blocked" }
+        try await h.controller.update(profile: await h.controller.profile)
+        await h.controller.reconcileOnLaunch()
+        #expect(await h.wait(for: .connected))
+        #expect(await h.world.tokens == ["T9"])
+    }
+
     /// With the VPN off, a helper stop (an update) leaves the network alone.
     @Test func helperStopWithVPNOffLeavesTheNetwork() async {
         let h = Harness()

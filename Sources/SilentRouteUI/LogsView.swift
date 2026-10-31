@@ -40,13 +40,9 @@ struct LogsView: View {
                 ContentUnavailableView("No Sessions Yet", systemImage: "doc.text",
                                        description: Text("Each time you turn the VPN on, its session is logged here and in ~/Library/Logs/Silent Route. The last 30 are kept, and only you can see yours — other users of this Mac see only their own."))
             } else {
-                // One rounded group, like the profiles in the sidebar.
-                List(selection: $selected) {
-                    ForEach(Array(sessions.enumerated()), id: \.element.id) { i, s in
-                        SessionRow(session: s)
-                            .tag(s.id)
-                            .listRowBackground(GroupedRowBackground(isFirst: i == 0, isLast: i == sessions.count - 1))
-                    }
+                // The standard look, like the profiles in the sidebar.
+                List(sessions, selection: $selected) { s in
+                    SessionRow(session: s).tag(s.id)
                 }
                 .listStyle(.sidebar)
             }
