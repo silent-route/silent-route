@@ -9,13 +9,15 @@ import VPNCore
 ///  ▲                 │ any failure                  │ sing-box died / unhealthy
 ///  │                 ▼                              ▼
 ///  └──────────── off + error                  reconnecting  (pf keeps blocking,
-///     network untouched, no kill switch                       retries with backoff)
+///     network as before, no kill switch                       retries with backoff)
 /// stop / panic from any state ──▶ off, pf anchor empty, network as before
 /// ```
 ///
 /// Rules this code keeps:
-/// - The kill switch goes on last, only after the tunnel has been proven to
-///   work. A failed start leaves the network exactly as it was.
+/// - With a kill switch on any active route, blocking goes on as soon as a
+///   start's checks pass — before sing-box runs — and the tunnel is proven
+///   behind it. A failed start lifts it: the network ends exactly as it was.
+///   Without a kill switch nothing is blocked at any point.
 /// - Once on, it stays on until the user stops or panics — a crash of
 ///   sing-box never opens the network.
 /// - Actor methods can interleave at `await`. Every operation records the
@@ -140,6 +142,10 @@ public actor Controller {
 
     /// What the previous helper left, as it was when this one started.
     private let savedAtLaunch: PersistedState?
+    /// sing-box answers DNS on this Mac's port 53 too (see SystemDNS): set
+    /// per attempt, when the port is free and the guard keeping it to this
+    /// Mac is in place.
+    private var localDNS = false
 
     // MARK: - Status
 
@@ -193,6 +199,7 @@ public actor Controller {
         } catch let e as CommandError {
             if epoch == my {
                 wantConnected = false
+                await liftFailedStart()
                 set(.off, error: e.description)
                 session(.ended(reason: "could not connect — \(e.description)"))
             }
@@ -200,11 +207,22 @@ public actor Controller {
         } catch {
             if epoch == my {
                 wantConnected = false
+                await liftFailedStart()
                 set(.off, error: error.localizedDescription)
                 session(.ended(reason: "could not connect — \(error.localizedDescription)"))
             }
             throw .failed(error.localizedDescription)
         }
+    }
+
+    /// A first start failed: sing-box goes, and the block it was proven
+    /// behind is lifted ("Always" keeps it), so the network is as before.
+    private func liftFailedStart() async {
+        if let pid = enginePID { await killEngine(pid) }
+        await network.releaseLocalDNS()
+        localDNS = false
+        guard pfToken != nil || profile.protectionMode == .always else { return }
+        await teardown()
     }
 
     public func stop() async {
@@ -239,6 +257,8 @@ public actor Controller {
         if let pid { await engine.terminate(pid: pid) }
         await network.restoreRouting()
         await network.restoreDNS()
+        await network.releaseLocalDNS()
+        localDNS = false
         session(.ended(reason: "Emergency Restore"))
         connectedSince = nil
         sessionSince = nil
@@ -302,7 +322,7 @@ public actor Controller {
         }
         guard epoch == my, phase == .connected else { return }
         // DHCP may have rewritten the DNS (a new Wi-Fi): point it back.
-        await network.overrideDNS(server: SingBoxConfig.tunDNS)
+        await network.overrideDNS(server: SingBoxConfig.tunDNS, local: localDNS)
         guard epoch == my, phase == .connected else { return }
         let anyUp = await checkServers(epoch: my)
         guard epoch == my, phase == .connected else { return }
@@ -324,11 +344,6 @@ public actor Controller {
         beginRecovery(epoch: epoch, reason: "no exit answers")
     }
 
-    /// Measures every server in use and points each route's selector at
-    /// the first server of its list that answers; with none, direct (kill
-    /// switch off) or its first, dead server, which fails every connection
-    /// (kill switch on). Returns whether any server answered.
-    @discardableResult
     private func describe(_ v: RouteState.Via) -> String {
         switch v {
         case .server(let id): "now through “\(profile.tunnels.first { $0.id == id }?.name ?? "a server")”"
@@ -337,6 +352,11 @@ public actor Controller {
         }
     }
 
+    /// Measures every server in use and points each route's selector at
+    /// the first server of its list that answers; with none, direct (kill
+    /// switch off) or its first, dead server, which fails every connection
+    /// (kill switch on). Returns whether any server answered.
+    @discardableResult
     private func checkServers(epoch my: Int) async -> Bool {
         let engine = self.engine
         let routes = profile.serverRoutes
@@ -379,6 +399,9 @@ public actor Controller {
     /// one round of checks covers them all.
     public func networkChanged() async {
         guard phase == .connected, probing == nil else { return }
+        // In the log: the errors sing-box prints right now (connections cut
+        // by the change) have a cause a reader can see.
+        session(.note("the network changed; checking the servers"))
         let my = epoch
         probing = Task { [weak self] in await self?.probe(epoch: my) }
     }
@@ -392,7 +415,7 @@ public actor Controller {
             guard epoch == my, phase == .connected else { break }
             await judge(anyUp: anyUp, epoch: my)
             if anyUp {
-                await network.overrideDNS(server: SingBoxConfig.tunDNS)
+                await network.overrideDNS(server: SingBoxConfig.tunDNS, local: localDNS)
                 break
             }
         }
@@ -445,8 +468,10 @@ public actor Controller {
         await pfRun { await $0.flush() }
         if !rebooted, let old = saved?.pfToken { await pfRun { await $0.release(token: old) } }
         // A helper that crashed while connected left macOS's DNS pointing
-        // into a tunnel that is gone: put it back.
+        // into a tunnel that is gone, and maybe the local DNS guard: put
+        // both back.
         await network.restoreDNS()
+        await network.releaseLocalDNS()
         wantConnected = false
         set(.off)
     }
@@ -460,6 +485,7 @@ public actor Controller {
     private func makeConfig() throws -> Data {
         var env = options.configEnvironment
         env.clashAPISecret = (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined()
+        env.localDNS = localDNS
         env.captive = options.captivePort.map {
             .init(port: $0, username: "silentroute",
                   password: (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined())
@@ -507,6 +533,8 @@ public actor Controller {
                     enginePID = nil
                     await engine.terminate(pid: pid)
                 }
+                await network.releaseLocalDNS()
+                localDNS = false
                 connectedSince = nil
                 apiSecret = nil
                 session(.ended(reason: "the helper stopped (an update or a shutdown); the network stays blocked until the VPN is back"))
@@ -525,8 +553,11 @@ public actor Controller {
     }
 
     /// One connection attempt. With `keepBlockingOnFailure` (recovery), a
-    /// failure leaves pf as it is; on a first start nothing has been blocked
-    /// yet and a failure leaves the network untouched.
+    /// failure leaves pf as it is. On a first start with a kill switch on
+    /// any active route, everything outside sing-box is blocked once the
+    /// checks pass and before sing-box starts, so nothing goes out past the
+    /// tunnel while its servers are being proven; `start` lifts the block if
+    /// the attempt fails. Without a kill switch the network is not touched.
     private func connect(epoch my: Int, keepBlockingOnFailure: Bool) async throws {
         if !keepBlockingOnFailure, let other = await network.foreignTunnel() {
             throw CommandError.failed("Another VPN is active (\(other)). Turn it off first.")
@@ -536,6 +567,8 @@ public actor Controller {
 
         let config: Data
         let blocked: String
+        localDNS = await network.prepareLocalDNS()
+        guard epoch == my else { return }
         do {
             config = try makeConfig()
             blocked = try rules(tun: nil)
@@ -546,6 +579,10 @@ public actor Controller {
         try await engine.check(config: config)
         try await pf.validate(blocked)
         guard epoch == my else { return }
+        if !keepBlockingOnFailure, profile.protectionMode != .off {
+            await holdBlocking(epoch: my)
+            guard epoch == my else { return }
+        }
 
         let pid = try await engine.launch(config: config) { [weak self] pid in
             Task { await self?.engineExited(pid: pid) }
@@ -610,7 +647,7 @@ public actor Controller {
             lastError = nil
             set(.connected)
             session(.note("connected"))
-            await network.overrideDNS(server: SingBoxConfig.tunDNS)
+            await network.overrideDNS(server: SingBoxConfig.tunDNS, local: localDNS)
             return
         }
         let connectedRules = try rules(tun: tun)
@@ -634,7 +671,7 @@ public actor Controller {
         set(.connected)
         session(.note("connected"))
         // macOS's resolver into the tunnel: no name is asked of the router.
-        await network.overrideDNS(server: SingBoxConfig.tunDNS)
+        await network.overrideDNS(server: SingBoxConfig.tunDNS, local: localDNS)
     }
 
     /// Why the servers are not proven to carry traffic, or nil if they are:
@@ -769,6 +806,8 @@ public actor Controller {
         via = [:]
         latency = [:]
         await network.restoreDNS()
+        await network.releaseLocalDNS()
+        localDNS = false
         if let pid = enginePID {
             enginePID = nil
             await engine.terminate(pid: pid)

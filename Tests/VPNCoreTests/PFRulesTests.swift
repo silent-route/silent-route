@@ -100,4 +100,13 @@ import Testing
         #expect(p.terminationStatus == 0, "pfctl -n rejected the rules: \(out)")
         return out
     }
+
+    /// The local DNS answers this Mac only: anything for port 53 coming in
+    /// on another interface than loopback is dropped; nothing going out is.
+    @Test func dnsGuardKeepsPort53ToTheMac() {
+        let rules = PFRules.dnsGuard()
+        let active = rules.split(separator: "\n").filter { !$0.hasPrefix("#") && !$0.isEmpty }
+        #expect(active == ["block drop in quick on ! lo0 proto { tcp udp } from any to any port 53"])
+        #expect(PFRules.dnsGuardAnchor.hasPrefix("com.apple/") && PFRules.dnsGuardAnchor != PFRules.anchor)
+    }
 }

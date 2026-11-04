@@ -3,13 +3,40 @@ import VPNCore
 
 public struct SystemNetwork: NetworkInspector {
     let dns: SystemDNS
+    let dnsGuard = LocalDNSGuard()
 
     public init(dnsBackup: URL = URL(fileURLWithPath: "/Library/Application Support/Silent Route/run/dns-backup.plist")) {
         dns = SystemDNS(backupURL: dnsBackup)
     }
 
-    public func overrideDNS(server: String) async {
-        if dns.apply(server: server) { await Self.flushDNSCache() }
+    public func overrideDNS(server: String, local: Bool) async {
+        if dns.apply(server: server, local: local) { await Self.flushDNSCache() }
+    }
+
+    public func prepareLocalDNS() async -> Bool {
+        guard Self.portFree(53) else { return false }
+        return await dnsGuard.on()
+    }
+
+    public func releaseLocalDNS() async { await dnsGuard.off() }
+
+    /// Whether nothing listens on port 53 yet (TCP and UDP, any address).
+    static func portFree(_ port: UInt16) -> Bool {
+        for type in [SOCK_DGRAM, SOCK_STREAM] {
+            let fd = socket(AF_INET, type, 0)
+            guard fd >= 0 else { return false }
+            defer { close(fd) }
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = port.bigEndian
+            addr.sin_addr.s_addr = INADDR_ANY
+            let ok = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 }
+            }
+            if !ok { return false }
+        }
+        return true
     }
 
     public func restoreDNS() async {
@@ -27,14 +54,25 @@ public struct SystemNetwork: NetworkInspector {
     /// the login-page proxy, so it goes out directly even while everything
     /// else is blocked. No answer at all is not a login page.
     public func captivePortal(via proxy: SingBoxConfig.LocalProxy) async -> Bool {
-        let r = await Command.run("/usr/bin/curl", [
-            "-s", "-m", "6", "-o", "-", "-w", "\n%{http_code}",
-            "-x", "socks5h://127.0.0.1:\(proxy.port)", "-U", "\(proxy.username):\(proxy.password)",
-            "http://captive.apple.com/hotspot-detect.html",
-        ])
+        let (args, config) = Self.captiveCheck(proxy)
+        let r = await Command.run("/usr/bin/curl", args, input: config)
         let lines = r.text.split(separator: "\n")
         guard let code = lines.last.flatMap({ Int($0) }), code != 0 else { return false }
         return !(code == 200 && r.text.contains("Success"))
+    }
+
+    /// curl's arguments and its config (read from stdin). The proxy's
+    /// password goes in the config: a command line is visible to every user
+    /// of the Mac (`ps`), and that password is the one way past the kill
+    /// switch while it is valid.
+    static func captiveCheck(_ proxy: SingBoxConfig.LocalProxy) -> (args: [String], config: String) {
+        let args = ["-s", "-m", "6", "-o", "-", "-w", "\n%{http_code}",
+                    "-x", "socks5h://127.0.0.1:\(proxy.port)", "-K", "-",
+                    "http://captive.apple.com/hotspot-detect.html"]
+        func quoted(_ s: String) -> String {
+            "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        }
+        return (args, "proxy-user = \(quoted("\(proxy.username):\(proxy.password)"))\n")
     }
 
     /// The interface carrying sing-box's TUN address.
@@ -131,6 +169,39 @@ public struct SystemNetwork: NetworkInspector {
         r.standardError = FileHandle.nullDevice
         do { try r.run(); r.waitUntilExit() } catch { return false }
         return r.terminationStatus == 0
+    }
+}
+
+/// The pf anchor that keeps sing-box's DNS on port 53 to this Mac alone
+/// (PFRules.dnsGuard), with its own reference on pf being enabled.
+public final class LocalDNSGuard: @unchecked Sendable {
+    private let pf = SystemPacketFilter(anchor: PFRules.dnsGuardAnchor)
+    private let lock = NSLock()
+    private var token: String?
+
+    /// True once the guard is in place (also if it already was).
+    func on() async -> Bool {
+        if lock.withLock({ token != nil }), await pf.isLoadedRules() { return true }
+        let rules = PFRules.dnsGuard()
+        do {
+            try await pf.validate(rules)
+            try await pf.load(rules)
+            if lock.withLock({ token == nil }) {
+                let t = try await pf.enable()
+                lock.withLock { token = t }
+            }
+            return true
+        } catch {
+            await off()
+            return false
+        }
+    }
+
+    func off() async {
+        await pf.flush()
+        if let t = lock.withLock({ () -> String? in let t = token; token = nil; return t }) {
+            await pf.release(token: t)
+        }
     }
 }
 

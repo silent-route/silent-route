@@ -13,6 +13,7 @@ public struct MainWindow: View {
     @State private var dropTargeted = false
     @State private var monitor = TrafficMonitor()
     @State private var settingsOpen = false
+    @State private var windowVisible = true
 
     enum Item: Hashable {
         case monitor
@@ -32,6 +33,15 @@ public struct MainWindow: View {
         _monitor = State(initialValue: monitor)
     }
 
+    private var windowTitle: String {
+        switch selection {
+        case .monitor: "Monitor"
+        case .logs: "Logs"
+        case .profile: "Profile"
+        case nil: "Silent Route"
+        }
+    }
+
     private var selectedProfile: Profile.ID? {
         if case .profile(let id) = selection { id } else { nil }
     }
@@ -42,7 +52,16 @@ public struct MainWindow: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 300)
         } detail: {
             // On the detail column, so they sit on its trailing side.
-            detail.toolbar { toolbar }
+            detail
+                .toolbar { toolbar }
+                // The title says what kind of page this is — Monitor, Logs,
+                // Profile — not its name, which a profile shows large right
+                // below. One modifier for every page, so switching never
+                // leaves the previous page's title behind.
+                .navigationTitle(windowTitle)
+                // SwiftUI fills the title in only after the first change;
+                // the window gets it from the start.
+                .background(WindowTitle(windowTitle))
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.silentRouteProfile, .json],
                       allowsMultipleSelection: true) { result in
@@ -92,13 +111,20 @@ public struct MainWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { note in
             updateSettingsOpen(closing: note.object as? NSWindow)
         }
-        .onChange(of: selection) { _, new in
-            if new == .monitor {
-                monitor.setProfile(model.library.active)
-                monitor.start { [model] in await model.apiCredentials() }
-            } else {
-                monitor.stop()
-            }
+        // Live traffic is read only while someone can see it: the Monitor
+        // page, in a window that is on screen.
+        .background(WindowVisibility { windowVisible = $0 })
+        .onChange(of: selection) { _, _ in updateMonitor() }
+        .onChange(of: windowVisible) { _, _ in updateMonitor() }
+        .onChange(of: model.library.active) { _, p in monitor.setProfile(p) }
+    }
+
+    private func updateMonitor() {
+        if selection == .monitor && windowVisible {
+            monitor.setProfile(model.library.active)
+            monitor.start { [model] in await model.apiCredentials() }
+        } else {
+            monitor.stop()
         }
     }
 
@@ -429,6 +455,51 @@ struct ProfileDocument: FileDocument {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         return FileWrapper(regularFileWithContents: try enc.encode(profile))
+    }
+}
+
+/// Reports whether the hosting window is on screen: not closed, not
+/// minimised, not on another desktop, not fully covered.
+private struct WindowVisibility: NSViewRepresentable {
+    let changed: (Bool) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = Watcher()
+        view.changed = changed
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) { (view as? Watcher)?.changed = changed }
+
+    final class Watcher: NSView {
+        var changed: ((Bool) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Selector-based: removed with the view, no bookkeeping.
+            NotificationCenter.default.removeObserver(self)
+            guard let window else { return }
+            NotificationCenter.default.addObserver(self, selector: #selector(occlusionChanged),
+                                                   name: NSWindow.didChangeOcclusionStateNotification, object: window)
+            report()
+        }
+
+        @objc private func occlusionChanged(_ note: Notification) { report() }
+
+        private func report() {
+            let visible = window.map { $0.isVisible && $0.occlusionState.contains(.visible) } ?? false
+            DispatchQueue.main.async { [weak self] in self?.changed?(visible) }
+        }
+    }
+}
+
+/// Sets the hosting window's title.
+private struct WindowTitle: NSViewRepresentable {
+    let title: String
+    init(_ title: String) { self.title = title }
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        let title = self.title
+        DispatchQueue.main.async { view.window?.title = title }
     }
 }
 

@@ -213,6 +213,7 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     let engine: SingBoxEngine
     let paths: Paths
     let group: UInt32
+    private let probes = Gate(limit: 3)
 
     init(controller: Controller, profiles: ProfileManager, apiPort: UInt16, version: String, sessionLog: SessionLog,
          engine: SingBoxEngine, paths: Paths, group: UInt32) {
@@ -227,9 +228,13 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     }
 
     func call(_ request: Data, reply: @escaping @Sendable (Data) -> Void) {
-        // Who is asking: macOS vouches for the connection's user. Logs are
-        // per user, so this decides whose sessions a request can see.
-        let uid = NSXPCConnection.current()?.effectiveUserIdentifier ?? 0
+        // Who is asking: macOS vouches for the connection's user, and that
+        // decides what a request may see and do. No connection to vouch for
+        // means no answer — never a default (0 would be root).
+        guard let uid = NSXPCConnection.current()?.effectiveUserIdentifier else {
+            reply((try? JSONEncoder().encode(IPC.Response(error: "Unknown client"))) ?? Data())
+            return
+        }
         Task {
             let response = await handle(request, uid: uid)
             reply((try? JSONEncoder().encode(response)) ?? Data())
@@ -290,9 +295,22 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 // switch's group, bound to the physical interface.
                 let errors = Validation.check(Profile(name: "check", tunnels: [t])).filter { $0.severity == .error && $0.tunnel == t.id }
                 guard errors.isEmpty else { return await respond(uid, error: errors.map(\.message).joined(separator: "; ")) }
-                let binary = try engine.verifiedBinary()
-                let report = try await Probe.run(t, singBox: binary, socksPort: Daemon.freePort(),
+                // Any user of the Mac may check a server, but each check is
+                // a sing-box run as root: a few at a time, not unbounded.
+                guard await probes.enter() else {
+                    return await respond(uid, error: "Too many server checks at once — try again in a moment")
+                }
+                let binary: String
+                let report: Probe.Report
+                do {
+                    binary = try engine.verifiedBinary()
+                    report = try await Probe.run(t, singBox: binary, socksPort: Daemon.freePort(),
                                                  launcher: [paths.helper.path, "exec-engine", String(group)], direct: true)
+                } catch {
+                    await probes.leave()
+                    throw error
+                }
+                await probes.leave()
                 var r = await respond(uid)
                 r.probe = report
                 return r
@@ -318,4 +336,17 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
         }
         return await respond(uid)
     }
+}
+
+/// At most `limit` at once; the rest are refused rather than queued.
+actor Gate {
+    let limit: Int
+    private var inside = 0
+    init(limit: Int) { self.limit = limit }
+    func enter() -> Bool {
+        guard inside < limit else { return false }
+        inside += 1
+        return true
+    }
+    func leave() { inside = max(0, inside - 1) }
 }

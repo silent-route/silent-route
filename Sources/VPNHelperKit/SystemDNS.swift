@@ -1,5 +1,6 @@
 import Foundation
 import SystemConfiguration
+import VPNCore
 
 /// Points macOS's resolver into the tunnel while the VPN is on, and puts it
 /// back afterwards.
@@ -29,34 +30,52 @@ public final class SystemDNS: @unchecked Sendable {
     }
 
     /// What was there before: the value of each key we changed, or nil
-    /// where there was none.
+    /// where there was none; and what we put there, per key.
     private struct Backup {
         var server: String
         var originals: [String: [String: Any]?]
+        var applied: [String: String] = [:]
+
+        /// The address this key holds while it is ours.
+        func ours(_ key: String) -> String { applied[key] ?? server }
     }
 
     // MARK: Apply and restore
 
-    /// Every active service resolves through `server`. Returns whether
-    /// anything changed (then the DNS cache is flushed).
+    /// Every active service resolves through sing-box. With `local`, each
+    /// service gets its own interface's IPv4 address — sing-box answers DNS
+    /// on port 53 there — so that queries macOS scopes to that interface
+    /// (its own network checks do) reach sing-box too; the tunnel address
+    /// would only be reachable unscoped, and macOS takes a resolver that
+    /// never answers for a broken network (it resets Wi-Fi). Without
+    /// `local`, or for a service with no IPv4 address, `server`.
+    /// Returns whether anything changed (then the DNS cache is flushed).
     @discardableResult
-    public func apply(server: String) -> Bool {
+    public func apply(server: String, local: Bool = false) -> Bool {
         lock.withLock {
             guard let store else { return false }
             var backup = loadBackup() ?? Backup(server: server, originals: [:])
             backup.server = server
             var changed = false
             for id in activeServiceIDs(store) {
+                let address = local ? (Self.ipv4Address(store, service: id) ?? server) : server
                 for domain in ["State", "Setup"] {
                     let key = "\(domain):/Network/Service/\(id)/DNS"
                     let current = SCDynamicStoreCopyValue(store, key as CFString) as? [String: Any]
-                    if Self.servers(current) == [server] { continue }
+                    if Self.servers(current) == [address] { backup.applied[key] = address; continue }
                     // What is there now is the network's own value (a first
-                    // apply, or DHCP rewrote it): that is what goes back.
-                    backup.originals[key] = .some(current)
+                    // apply, or DHCP rewrote it) — unless it is one of ours
+                    // from before (the service's address changed): what goes
+                    // back is still the network's.
+                    if !(backup.originals.keys.contains(key) && Self.servers(current) == [backup.ours(key)]) {
+                        backup.originals[key] = .some(current)
+                    }
                     var mine = current ?? [:]
-                    mine["ServerAddresses"] = [server]
-                    if SCDynamicStoreSetValue(store, key as CFString, mine as CFDictionary) { changed = true }
+                    mine["ServerAddresses"] = [address]
+                    if SCDynamicStoreSetValue(store, key as CFString, mine as CFDictionary) {
+                        changed = true
+                        backup.applied[key] = address
+                    }
                 }
             }
             saveBackup(backup)
@@ -72,7 +91,7 @@ public final class SystemDNS: @unchecked Sendable {
             guard let store, let backup = loadBackup() else { return }
             for (key, original) in backup.originals {
                 let current = SCDynamicStoreCopyValue(store, key as CFString) as? [String: Any]
-                guard Self.servers(current) == [backup.server] else { continue }   // changed since: not ours to touch
+                guard Self.servers(current) == [backup.ours(key)] else { continue }   // changed since: not ours to touch
                 if let original {
                     SCDynamicStoreSetValue(store, key as CFString, original as CFDictionary)
                 } else {
@@ -96,6 +115,13 @@ public final class SystemDNS: @unchecked Sendable {
         return ids
     }
 
+    /// The service's first IPv4 address, as DHCP or the user set it.
+    private static func ipv4Address(_ store: SCDynamicStore, service id: String) -> String? {
+        let v = SCDynamicStoreCopyValue(store, "State:/Network/Service/\(id)/IPv4" as CFString) as? [String: Any]
+        guard let a = (v?["Addresses"] as? [String])?.first, IPNetwork(a)?.family == .v4 else { return nil }
+        return a
+    }
+
     static func servers(_ value: [String: Any]?) -> [String] {
         value?["ServerAddresses"] as? [String] ?? []
     }
@@ -110,14 +136,15 @@ public final class SystemDNS: @unchecked Sendable {
             let dict = v as? [String: Any]
             map[k] = .some(dict?["__none__"] != nil ? nil : dict)
         }
-        return Backup(server: server, originals: map)
+        // Backups of earlier versions have no "applied": every key held `server`.
+        return Backup(server: server, originals: map, applied: plist["applied"] as? [String: String] ?? [:])
     }
 
     private func saveBackup(_ b: Backup) {
         var originals: [String: Any] = [:]
         // A key that had no value is stored as an empty marker.
         for (k, v) in b.originals { originals[k] = v ?? ["__none__": true] }
-        let plist: [String: Any] = ["server": b.server, "originals": originals]
+        let plist: [String: Any] = ["server": b.server, "originals": originals, "applied": b.applied]
         guard let d = try? PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0) else { return }
         try? FileManager.default.createDirectory(at: backupURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: backupURL.path, contents: d, attributes: [.posixPermissions: 0o600])

@@ -12,7 +12,10 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-26
+    # Intel: GitHub's Apple Silicon runners are often short of capacity
+    # (a job may never be picked up). The app is built for both
+    # architectures either way; Xcode 26 is there too.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,7 +24,7 @@ jobs:
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)" && swift --version
       - name: sing-box
         run: scripts/fetch-sing-box.sh
-      - name: Tests (Apple Silicon)
+      - name: Tests
         run: scripts/test.sh
       - name: Build the universal app
         env:

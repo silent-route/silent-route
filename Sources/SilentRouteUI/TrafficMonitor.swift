@@ -4,19 +4,12 @@ import Observation
 import VPNCore
 import VPNIPC
 
-/// Live traffic from sing-box's clash API: one snapshot of /connections a
-/// second, only while someone looks at it. Rates come from the byte
-/// counters' change between two snapshots; nothing is kept beyond the last
-/// two minutes of totals.
+/// Live connections from sing-box's clash API: one snapshot of /connections
+/// a second, only while someone looks at it. Rates come from the byte
+/// counters' change between two snapshots. (The speed chart's history is
+/// kept by the app for the whole session: `SpeedHistory`.)
 @MainActor @Observable
 final class TrafficMonitor {
-    struct Sample: Identifiable, Equatable {
-        var id: Date { time }
-        var time: Date
-        var down: Int64
-        var up: Int64
-    }
-
     struct Connection: Identifiable, Equatable {
         var id: String
         var app: AppRef
@@ -53,13 +46,10 @@ final class TrafficMonitor {
         var exits: [String]
     }
 
-    private(set) var samples: [Sample] = []
     private(set) var connections: [Connection] = []
     private(set) var downloadTotal: Int64 = 0
     private(set) var uploadTotal: Int64 = 0
     private(set) var problem: String?
-
-    var current: Sample? { samples.last }
 
     var apps: [AppTraffic] {
         Dictionary(grouping: connections, by: \.app).map { app, cs in
@@ -82,8 +72,7 @@ final class TrafficMonitor {
     init() {}
 
     /// For the snapshot tool.
-    init(preview samples: [Sample], connections: [Connection]) {
-        self.samples = samples
+    init(preview connections: [Connection]) {
         self.connections = connections
     }
 
@@ -99,14 +88,8 @@ final class TrafficMonitor {
         defaultRouteName = p.defaultRoute.name
     }
 
-    /// The chart's window: the last two minutes, always this wide.
-    static let window: TimeInterval = 120
-
     func start(credentials: @escaping @Sendable () async -> IPC.APICredentials?) {
         guard task == nil else { return }
-        // Nothing was measured while nobody looked: a line from before the
-        // gap to now would be made up. Start the chart afresh.
-        if let t = samples.last?.time, Date().timeIntervalSince(t) > 3 { samples = [] }
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -180,13 +163,6 @@ final class TrafficMonitor {
                 conn.upRate = Int64(Double(max(0, u - prev.1)) / dt)
             }
             list.append(conn)
-        }
-        // Totals that went down: sing-box restarted (a reconnect) and counts
-        // from zero again. That is a new baseline, not a drop to nothing.
-        if let last, down >= last.down, up >= last.up {
-            samples.append(Sample(time: now, down: Int64(Double(down - last.down) / dt),
-                                  up: Int64(Double(up - last.up) / dt)))
-            samples.removeAll { now.timeIntervalSince($0.time) > Self.window }
         }
         last = (now, down, up, perConn)
         downloadTotal = down

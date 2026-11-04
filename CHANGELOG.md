@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.2-beta
+## 1.3.4-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -19,10 +19,17 @@ Everything that changed since 1.0.1-beta.
 
 On most networks macOS asks the router to look up names, and the router is reached over the local network — past the tunnel. The router, and the provider behind it, could see every site you opened even with the VPN on. Some providers also answer with fake addresses for sites they block, so those sites failed even through the VPN.
 
-- **While the VPN is on, macOS's resolver points into the tunnel** (`172.19.0.6`), where sing-box answers by your profile's rules: names of routes through servers are resolved encrypted through that same server, names of direct routes by the direct resolver.
+- **While the VPN is on, macOS's resolver points at sing-box**, which answers by your profile's rules: names of routes through servers are resolved encrypted through that same server, names of direct routes by the direct resolver.
+- **Wi-Fi is no longer reset every half hour.** sing-box answers DNS on this Mac's port 53, and each network service is given its own address as its DNS server. Before, macOS was pointed at an address inside the tunnel, which its own network checks (DNS scoped to the Wi-Fi interface) could never reach; macOS took that for a broken Wi-Fi and reconnected it about every 30 minutes, cutting every connection. That port answers this Mac only: DNS coming in from the network is dropped while the VPN is on, so other devices nearby can neither use nor probe it. If something else already uses port 53, the address inside the tunnel is used as before.
 - **The kill switch now lets only sing-box ask the router** (DNS on ports 53 and 853, IPv4 and IPv6), so nothing that talks to the router directly can leak names either.
 - **Local names still work.** Names in the profile's *local zones* — by default `lan`, `home.arpa` and `internal` (a NAS, a printer, the router's own page) — are asked of the router, and nothing else is. Change the list in the profile's DNS tab. Names ending in `.local` (AirPrint, AirDrop) were never DNS and keep working.
 - **Your network settings are not changed.** Only macOS's live network state is: it goes back when the VPN turns off, on Emergency Restore and when the helper stops; a crashed helper puts it back when it starts again; and a restart of the Mac starts from your own settings, untouched. If a network rewrites its DNS (a new Wi-Fi), the helper points it back within seconds.
+
+### A kill switch from the first moment
+
+- **With a kill switch on any active route, everything outside the tunnel is blocked the moment you turn the VPN on**, and the servers are checked behind that block. Before, traffic went out directly for the few seconds the first connection took. If the VPN cannot connect, the block is lifted and the network is as it was. A kill switch on a route that is turned off does not count; with none on any active route, nothing is ever blocked.
+- **Ping no longer clutters the log.** A proxy server cannot carry ping, so pings meant for a route through servers were dropped with a warning for every packet. They are now refused at once — never sent past the tunnel — and routes that go direct keep their ping.
+- When the network changes, the session log says so, so the errors sing-box prints for the connections the change cut have a visible cause.
 
 ### Hotel and café Wi-Fi, without turning the VPN off
 
@@ -69,9 +76,13 @@ The whole interface was reworked to follow Apple's Human Interface Guidelines fo
 - **Everything is in the menu bar too:** File › New Profile (⌘N), Import Profile… (⌘O), Export Profile… (⇧⌘E); View › Monitor, Logs, Active Profile (⌘1, ⌘2, ⌘3); VPN › Turn VPN On / Off (⇧⌘T) and Emergency Restore…; Window › Silent Route (⌘0); Help › Silent Route Help.
 - **Settings as toolbar panes** (General, Notifications, Updates, Advanced), the window titled after the open pane, and the last pane you viewed comes back.
 - **Edit… is in each route's ⋯ menu**, *Everything else* included, next to Duplicate and Delete. A double-click on a route opens it too.
+- **Logs: right-click a session** to export it (with or without addresses), show it in Finder, or move it to the Trash.
 - **The profiles and the logs are plain lists with the system's own selection,** as in Finder, Mail and Notes. The session still running is marked with a green dot on the right, as the active profile is.
-- **Monitor is laid out like Activity Monitor's Network tab:** the list of apps or connections takes the window, edge to edge; below it, the figures (download, upload, connections, data received and sent) and a chart of the last two minutes in a thin frame — larger than Activity Monitor's. The chart always shows those two minutes and fills in from the right as data arrives, starts afresh after the page was closed, and a reconnect no longer shows as a fall to zero.
+- **Monitor is laid out like Activity Monitor's Network tab:** the list of apps or connections takes the window, edge to edge; below it, the figures (download, upload, connections, data received and sent) and a chart in a thin frame — larger than Activity Monitor's.
+- **The chart covers the whole session**, from the moment the VPN was turned on and across reconnects, also while Monitor was closed — open it any time to see what happened before. Show the last 2 minutes, an hour, or the whole session, with times along the bottom. A reconnect shows as a drop to zero. The list of connections is read only while Monitor is on screen.
 - **The Settings button in the toolbar is dimmed while Settings is open** and back to normal as soon as it is closed.
+- **The toolbar's title says what kind of page is open:** Monitor, Logs or Profile (a profile's name is already shown large on the page). Before, switching from Monitor or Logs to a profile left the previous title behind.
+- The main window opens a little wider by default.
 - **The menu bar panel closes when you switch to another app or another desktop.** It used to stay on screen and could look as if it had opened by itself.
 - Buttons that open another window end in an ellipsis (Add Route…, Install Helper…), and titles use Title Case, as in Apple's apps.
 
@@ -101,6 +112,9 @@ If your copy shows an update it cannot install, quit Silent Route and open it ag
 
 ### Security
 
+- **The Wi-Fi login proxy's password no longer appears on a command line,** where any user of the Mac could read it with `ps`; it is the one way past the kill switch while a network wants a login.
+- **The helper refuses a request it cannot attribute to a user,** instead of treating it as coming from root; and at most three server checks (each a sing-box run) go at once.
+- **“Without addresses” in logs also hides your account name** in the paths sing-box prints.
 - The helper runs as root but writes logs into a folder the user owns, so it never opens anything there by a path that could have been swapped: every folder on the way is opened without following symbolic links and must belong to the user, and each file is created new. Uninstalling removes such folders only at their exact path, never through a link.
 
 ### Uninstalling

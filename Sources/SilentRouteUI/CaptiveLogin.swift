@@ -92,7 +92,7 @@ struct LoginWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let store = WKWebsiteDataStore.nonPersistent()
-        var socks = ProxyConfiguration(socksv5Proxy: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: proxy.port)!))
+        let socks = ProxyConfiguration(socksv5Proxy: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: proxy.port)!))
         socks.applyCredential(username: proxy.username, password: proxy.password)
         store.proxyConfigurations = [socks]
         let config = WKWebViewConfiguration()

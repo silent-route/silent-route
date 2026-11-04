@@ -66,6 +66,10 @@ public final class AppModel {
     public private(set) var sessionBytes: Speed?
     private var sessionCarry = Speed(down: 0, up: 0)
     private var sessionKey: Date?
+    /// Speed over the whole session, for Monitor's chart (see SpeedHistory).
+    public internal(set) var history = SpeedHistory()
+    /// The session `history` belongs to; a new one starts it afresh.
+    private var historySession: Date?
 
     /// Where the uptime counts from, as chosen in Settings: this connection,
     /// or the whole session since the VPN was turned on.
@@ -110,7 +114,9 @@ public final class AppModel {
 
     /// For the snapshot tool: a model frozen in a given state.
     public init(preview backend: HelperBackend, helper: HelperState, status: VPNStatus, library: ProfileLibrary,
-                speed: Speed? = nil, session: Speed? = nil, notice: Notice? = nil) {
+                speed: Speed? = nil, session: Speed? = nil, notice: Notice? = nil,
+                history: SpeedHistory = SpeedHistory()) {
+        self.history = history
         self.backend = backend
         self.helper = helper
         self.status = status
@@ -354,10 +360,18 @@ public final class AppModel {
                 total.up += (obj["uploadTotal"] as? NSNumber)?.int64Value ?? 0
             }
             self.sessionBytes = total
+            // The chart's history: kept for the whole session, across
+            // reconnects (a new sing-box run); a new session starts afresh.
+            let session = self.status.sessionSince ?? self.status.connectedSince
+            if session != self.historySession {
+                self.history = SpeedHistory()
+                self.historySession = session
+            }
             await TrafficStream.run(port: api.port, secret: api.secret) { [weak self] s in
                 await MainActor.run {
                     guard let self else { return }
                     self.speed = s
+                    if let s { self.history.add(s, at: Date()) } else { self.history.pause(at: Date()) }
                     if let s, var t = self.sessionBytes {
                         t.down += s.down
                         t.up += s.up
@@ -370,6 +384,7 @@ public final class AppModel {
     }
 
     private func stopTraffic() {
+        if traffic != nil { history.pause(at: Date()) }
         traffic?.cancel()
         traffic = nil
         speed = nil

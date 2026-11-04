@@ -26,6 +26,10 @@ public enum SingBoxConfig {
         /// router's DNS. Only with its fresh per-start password, which only
         /// the owner's app gets. Nil: none (probe configs, tests).
         public var captive: LocalProxy?
+        /// sing-box also answers DNS on this Mac's port 53 (every address):
+        /// macOS is then pointed at each interface's own address, which is
+        /// reachable even by queries it scopes to that interface.
+        public var localDNS = false
 
         public init(ruleSetDirectory: String, cacheFile: String, clashAPIPort: UInt16, clashAPISecret: String,
                     geoIPCountries: Set<String>, siteLists: Set<String> = [], logLevel: String = "warn") {
@@ -52,6 +56,8 @@ public enum SingBoxConfig {
     }
 
     static let captiveTag = "captive-in"
+    /// The inbound answering DNS on port 53 of this Mac.
+    static let localDNSTag = "dns-in"
     /// Inside the TUN's /30, next to its own address: macOS's resolver is
     /// pointed here while connected, and sing-box answers (hijack-dns).
     public static let tunDNS = "172.19.0.6"
@@ -124,6 +130,11 @@ public enum SingBoxConfig {
             ["action": "sniff"],
             ["protocol": "dns", "action": "hijack-dns"],
         ]
+        if env.localDNS {
+            // Whatever arrives there is a query for sing-box's DNS, never
+            // something to pass on.
+            routeRules.insert(["inbound": [.string(localDNSTag)], "action": "hijack-dns"], at: 0)
+        }
         if env.captive != nil {
             // The login page's proxy: straight out, resolved by the router.
             routeRules += [
@@ -135,11 +146,14 @@ public enum SingBoxConfig {
             routeRules.append(["ip_is_private": true, "action": "route", "outbound": .string(directTag)])
         }
         for r in routes {
+            if let icmp = icmpReject(r) { routeRules.append(icmp) }
             routeRules.append(routeRule(r))
         }
         var final = directTag
         switch def.target {
-        case .servers: final = routeTag(def.id)
+        case .servers:
+            final = routeTag(def.id)
+            routeRules.append(["inbound": [.string(tunTag)], "network": .strings(["icmp"]), "action": "reject"])
         case .direct: break
         // A rule needs a condition: everything enters through the TUN.
         case .block: routeRules.append(["inbound": [.string(tunTag)], "action": "reject"])
@@ -195,7 +209,10 @@ public enum SingBoxConfig {
                 "type": "mixed", "tag": .string(captiveTag),
                 "listen": "127.0.0.1", "listen_port": .int(Int(c.port)),
                 "users": [["username": .string(c.username), "password": .string(c.password)]],
-            ]] } ?? [])),
+            ]] } ?? []) + (env.localDNS ? [[
+                "type": "direct", "tag": .string(localDNSTag),
+                "listen": "0.0.0.0", "listen_port": 53,
+            ]] : [])),
             "outbounds": .array(outbounds),
             "route": .object(route),
             "experimental": [
@@ -380,6 +397,23 @@ public enum SingBoxConfig {
         }
         if r.fragmentTLS, r.target != .block { rule["tls_fragment"] = true }
         return .object(rule)
+    }
+
+    /// Ping (ICMP) cannot travel through a proxy server: sent to a route's
+    /// servers, sing-box drops every packet with a warning in the log, and
+    /// the ping just times out. Refused at once instead — never sent direct,
+    /// which would show the destination past the tunnel. Routes that go
+    /// direct keep their ping; a route limited to TCP or UDP never sees it.
+    static func icmpReject(_ r: Route) -> JSON? {
+        guard case .servers = r.target, r.conditions.network == nil else { return nil }
+        var match = r
+        match.target = .block
+        match.fragmentTLS = false
+        guard case .object(var inner) = routeRule(match) else { return nil }
+        inner["action"] = nil
+        return .object(["type": "logical", "mode": "and",
+                        "rules": .array([.object(inner), ["network": .strings(["icmp"])]]),
+                        "action": "reject"])
     }
 
     static func appRegex(_ a: AppMatcher) -> String {

@@ -29,6 +29,12 @@ actor World {
     var foreign: String?
     var routingRestored = 0
     var dnsOverridden = false
+    /// macOS points at each interface's own address (sing-box on port 53).
+    var dnsLocal = false
+    /// The pf guard keeping port 53 to this Mac is in place.
+    var dnsGuard = false
+    /// Something else already listens on port 53.
+    var port53Taken = false
     /// The network wants a login (a hotel Wi-Fi).
     var captive = false
 
@@ -125,7 +131,18 @@ struct FakeNetwork: NetworkInspector {
     func tunInterface() async -> String? { await world.tun }
     func foreignTunnel() async -> String? { await world.foreign }
     func restoreRouting() async { await world.set { $0.routingRestored += 1; $0.log.append("net.restore") } }
-    func overrideDNS(server: String) async { await world.set { $0.dnsOverridden = true; $0.log.append("dns.override") } }
+    func overrideDNS(server: String, local: Bool) async {
+        await world.set { $0.dnsOverridden = true; $0.dnsLocal = local; $0.log.append(local ? "dns.override(local)" : "dns.override") }
+    }
+    func prepareLocalDNS() async -> Bool {
+        await world.set2 { w in
+            guard !w.port53Taken else { w.log.append("dns.local?no"); return false }
+            w.dnsGuard = true
+            w.log.append("dns.guard")
+            return true
+        }
+    }
+    func releaseLocalDNS() async { await world.set { $0.dnsGuard = false; $0.log.append("dns.unguard") } }
     func restoreDNS() async { await world.set { $0.dnsOverridden = false; $0.log.append("dns.restore") } }
     func captivePortal(via proxy: SingBoxConfig.LocalProxy) async -> Bool {
         await world.set2 { w in w.log.append("net.captive?"); return w.captive }

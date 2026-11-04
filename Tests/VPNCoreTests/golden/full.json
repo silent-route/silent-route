@@ -227,6 +227,23 @@
         "type" : "logical"
       },
       {
+        "action" : "reject",
+        "mode" : "and",
+        "rules" : [
+          {
+            "process_path_regex" : [
+              "^/Applications/Telegram\\.app/"
+            ]
+          },
+          {
+            "network" : [
+              "icmp"
+            ]
+          }
+        ],
+        "type" : "logical"
+      },
+      {
         "action" : "route",
         "outbound" : "r-00000000-0000-0000-0000-0000000000c1",
         "process_path_regex" : [
@@ -280,6 +297,15 @@
         "action" : "reject",
         "domain_keyword" : [
           "adserver"
+        ]
+      },
+      {
+        "action" : "reject",
+        "inbound" : [
+          "tun-in"
+        ],
+        "network" : [
+          "icmp"
         ]
       }
     ]

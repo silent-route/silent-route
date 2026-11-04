@@ -61,6 +61,22 @@ struct SingBoxCheckTests {
         try SingBox.check(json)
     }
 
+    /// DNS on the Mac's own port 53: an inbound on every address, whose
+    /// traffic is always handed to sing-box's DNS — never passed on.
+    @Test func localDNSIsAccepted() throws {
+        var env = SingBox.env
+        env.localDNS = true
+        let json = try SingBoxConfig.generate(Fixtures.profile, env: env)
+        guard case .array(let inbounds)? = json["inbounds"],
+              let dns = inbounds.first(where: { $0["tag"] == "dns-in" }) else { Issue.record("no dns-in inbound"); return }
+        #expect(dns["listen"] == "0.0.0.0" && dns["listen_port"] == 53)
+        guard case .array(let rules)? = json["route"]?["rules"] else { Issue.record("no rules"); return }
+        #expect(rules.first?["inbound"] == ["dns-in"] && rules.first?["action"] == "hijack-dns")
+        try SingBox.check(json)
+        // Off: no listener at all.
+        #expect(!(try SingBoxConfig.generate(Fixtures.profile, env: SingBox.env).text.contains("dns-in")))
+    }
+
     /// MTU, multiplexing and TLS fragmentation as sing-box 1.13 expects them.
     @Test func advancedOptionsAreAccepted() throws {
         let uuid = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
@@ -130,11 +146,27 @@ struct SingBoxCheckTests {
     }
 }
 
+/// In CI the checks above must run, not be skipped: a missing binary is a
+/// failure there (GitHub sets CI=true).
+@Suite struct SingBoxAvailability {
+    @Test func singBoxIsThereInCI() {
+        guard ProcessInfo.processInfo.environment["CI"] != nil else { return }
+        #expect(SingBox.path != nil, "sing-box not found: run scripts/fetch-sing-box.sh")
+    }
+}
+
 enum SingBox {
     static let path: String? = {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        // The pinned build first (scripts/fetch-sing-box.sh puts it there,
+        // in CI too), so the tests check the version that ships.
+        var u = utsname()
+        uname(&u)
+        let machine = withUnsafeBytes(of: &u.machine) { String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self) }
+        let arch = machine == "arm64" ? "arm64" : "amd64"
         let candidates: [String?] = [ProcessInfo.processInfo.environment["SING_BOX"],
+                                     root.appendingPathComponent("Resources/sing-box/sing-box-darwin-\(arch)").path,
                                      root.appendingPathComponent("Resources/sing-box/sing-box").path,
                                      "/usr/local/bin/sing-box", "/opt/homebrew/bin/sing-box"]
         return candidates.compactMap { $0 }.first { fm.isExecutableFile(atPath: $0) }

@@ -50,6 +50,13 @@ public struct LogStore: Sendable {
 
     /// A session's text; for a large file its head and its last `tail`
     /// bytes.
+    /// Moves a session's file to the Trash (it can be put back from there).
+    @discardableResult
+    public func moveToTrash(_ id: String) -> Bool {
+        guard let url = url(of: id) else { return false }
+        return (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil
+    }
+
     public func text(of id: String, tail: Int = 2_000_000) -> String? {
         guard let url = url(of: id), let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }

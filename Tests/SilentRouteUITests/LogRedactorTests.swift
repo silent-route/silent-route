@@ -19,4 +19,11 @@ import Testing
             #expect(r.contains(kept), "\(kept) lost")
         }
     }
+
+    /// Paths of apps in sing-box's messages carry the account name.
+    @Test func accountNameInPathsGoes() {
+        let r = LogRedactor.redact("process /Users/jane.doe/Applications/Tool.app/Contents/MacOS/Tool (user)")
+        #expect(!r.contains("jane.doe"))
+        #expect(r.contains("/Users/‹user›/Applications/"))
+    }
 }

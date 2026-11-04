@@ -60,17 +60,29 @@ let speed = Speed(down: 2_516_582, up: 184_320)
 @MainActor func model(_ helper: AppModel.HelperState = .ready, _ status: VPNStatus = VPNStatus(phase: .off),
                       _ lib: ProfileLibrary = library, speed: Speed? = nil, notice: AppModel.Notice? = nil) -> AppModel {
     AppModel(preview: FakeBackend(), helper: helper, status: status, library: lib, speed: speed,
-             session: speed.map { _ in Speed(down: 1_932_735_283, up: 88_080_384) }, notice: notice)
+             session: speed.map { _ in Speed(down: 1_932_735_283, up: 88_080_384) }, notice: notice,
+             history: speed == nil ? SpeedHistory() : sampleHistory())
+}
+
+/// Forty minutes of a session, with a short reconnect in the middle.
+func sampleHistory() -> SpeedHistory {
+    var h = SpeedHistory()
+    let now = Date()
+    for i in 0..<2400 {
+        let t = Double(i)
+        let time = now.addingTimeInterval(t - 2400)
+        if (1300..<1310).contains(i) {
+            if i == 1300 { h.pause(at: time) }
+            continue
+        }
+        h.add(Speed(down: Int64(900_000 + 700_000 * sin(t / 90) + Double((i * 7919) % 300_000)),
+                    up: Int64(90_000 + 40_000 * cos(t / 70))), at: time)
+    }
+    return h
 }
 
 @MainActor func sampleMonitor() -> TrafficMonitor {
     let now = Date()
-    let samples = (0..<90).map { i -> TrafficMonitor.Sample in
-        let t = Double(i)
-        return .init(time: now.addingTimeInterval(t - 90),
-                     down: Int64(900_000 + 700_000 * sin(t / 9) + Double((i * 7919) % 300_000)),
-                     up: Int64(90_000 + 40_000 * cos(t / 7)))
-    }
     func app(_ path: String) -> TrafficMonitor.AppRef { TrafficMonitor.app(path + " (user)") }
     let conns: [TrafficMonitor.Connection] = [
         .init(id: "1", app: app("/Applications/Safari.app/Contents/MacOS/Safari"), host: "www.youtube.com", port: "443", network: "TCP",
@@ -86,7 +98,7 @@ let speed = Speed(down: 2_516_582, up: 184_320)
               route: "Domestic", exit: "Direct", viaFallback: false, start: now.addingTimeInterval(-61),
               download: 3_100_000, upload: 120_000, downRate: 88_000, upRate: 4_000),
     ]
-    return TrafficMonitor(preview: samples, connections: conns)
+    return TrafficMonitor(preview: conns)
 }
 
 /// Two fictitious sessions in a temporary folder.
@@ -140,18 +152,21 @@ func render<V: View>(_ name: String, size: CGSize? = nil, _ view: V) {
 
 /// A whole window, toolbar included, as the app hosts it.
 @MainActor
-func renderWindow<V: View>(_ name: String, size: CGSize, _ view: V) {
+func renderWindow<V: View>(_ name: String, size: CGSize, then step: (@MainActor () -> Void)? = nil, _ view: V) {
     for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
         let host = NSHostingController(rootView: view)
         host.sceneBridgingOptions = [.toolbars, .title]
         let window = NSWindow(contentViewController: host)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.appearance = NSAppearance(named: appearance)
-        window.titleVisibility = .hidden
         window.setContentSize(size)
         window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
         window.orderFront(nil)
         for _ in 0..<12 { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        if let step {
+            step()
+            for _ in 0..<12 { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        }
         guard let frame = window.contentView?.superview,
               let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { continue }
         frame.cacheDisplay(in: frame.bounds, to: rep)
@@ -175,6 +190,8 @@ MainActor.assumeIsolated {
     render("logs", size: CGSize(width: 900, height: 420), LogsView(model: model(.ready, connected), store: sampleLogs()))
     renderWindow("full-routes", size: win, MainWindow(model: model(.ready, connected, speed: speed), selection: home.id))
     renderWindow("full-monitor", size: win, MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
+    renderWindow("full-monitor-then-profile", size: win, then: { WindowCommand.showActiveProfile.post() },
+                 MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
     renderWindow("full-settings", size: CGSize(width: 600, height: 480), SettingsView(model: model(.ready, connected)))
     render("window-monitor", size: win, MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
     for section in [ProfileEditor.Section.servers, .dns, .network] {

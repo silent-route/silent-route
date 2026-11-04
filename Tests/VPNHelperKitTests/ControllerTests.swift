@@ -5,13 +5,16 @@ import Testing
 
 /// The state machine against a scripted system. The two properties that
 /// matter most are checked throughout:
-///   1. a start that fails leaves pf untouched — the network works as before;
+///   1. a start that fails leaves the network as it was before;
 ///   2. once the kill switch is on, nothing but stop/panic turns it off.
 @Suite struct ControllerTests {
 
     // MARK: start
 
-    @Test func startConnectsAndLocksLast() async throws {
+    /// With a kill switch on any active route, everything outside sing-box
+    /// is blocked from the moment the switch is turned on — once the checks
+    /// pass, before sing-box runs — and the tunnel is proven behind it.
+    @Test func startBlocksBeforeSingBoxRuns() async throws {
         let h = Harness()
         try await h.controller.start()
         let s = await h.controller.status
@@ -19,19 +22,51 @@ import Testing
         #expect(s.killSwitchOn)
         #expect(await h.world.blocking)
         let log = await h.world.log
-        // Everything is validated before anything runs; pf comes after the tunnel is proven.
+        let check = log.firstIndex(of: "engine.check")!
+        let validate = log.firstIndex(of: "pf.validate")!
+        let blocked = log.firstIndex(of: "pf.load(blocked)")!
+        let enable = log.firstIndex(of: "pf.enable")!
         let launch = log.firstIndex { $0.hasPrefix("engine.launch") }!
         let health = log.firstIndex(of: "engine.health")!
-        let load = log.firstIndex(of: "pf.load(connected)")!
-        let enable = log.firstIndex(of: "pf.enable")!
-        #expect(log.firstIndex(of: "engine.check")! < launch)
-        #expect(log.firstIndex(of: "pf.validate")! < launch)
-        #expect(launch < health && health < load && load < enable)
-        #expect(!log.contains("pf.load(blocked)"))
+        let connected = log.firstIndex(of: "pf.load(connected)")!
+        // Validated before anything is touched; blocked before sing-box runs;
+        // the tunnel let through once proven.
+        #expect(check < blocked && validate < blocked)
+        #expect(blocked < enable && enable < launch)
+        #expect(launch < health && health < connected)
+        #expect(log.filter { $0 == "pf.enable" }.count == 1)
     }
 
+    /// No kill switch anywhere: the network is never blocked, not even
+    /// while the servers are being proven.
+    @Test func startWithoutKillSwitchNeverBlocks() async throws {
+        let h = Harness(killSwitch: .off)
+        try await h.controller.start()
+        #expect(await h.controller.status.phase == .connected)
+        let log = await h.world.log
+        #expect(!log.contains { $0.hasPrefix("pf.load") || $0 == "pf.enable" }, "\(log)")
+    }
+
+    /// Only active routes count: a kill switch on a route that is turned
+    /// off does not block anything.
+    @Test func killSwitchOnADisabledRouteDoesNotCount() async throws {
+        let h = Harness(killSwitch: .off)
+        var p = await h.controller.profile
+        p.routes.append(Route(name: "Off", enabled: false, conditions: Conditions(destinations: [.domain("example.org")]),
+                              target: .servers([Harness.h2.id]), killSwitch: true))
+        #expect(p.protectionMode == .off)
+        try await h.controller.update(profile: p)
+        try await h.controller.start()
+        #expect(!(await h.world.log.contains { $0.hasPrefix("pf.load") || $0 == "pf.enable" }))
+        p.routes[p.routes.count - 1].enabled = true
+        #expect(p.protectionMode == .whileConnected)
+    }
+
+    /// A failed start ends with the network as it was: checks that fail
+    /// before anything runs never touch pf; a failure behind the block
+    /// lifts it again.
     @Test(arguments: ["check", "launch", "dies", "noTun", "unhealthy", "foreign"])
-    func failedStartLeavesNetworkUntouched(failure: String) async {
+    func failedStartLeavesTheNetworkAsItWas(failure: String) async {
         let h = Harness()
         await h.world.set { w in
             switch failure {
@@ -48,8 +83,13 @@ import Testing
         #expect(s.phase == .off)
         #expect(!s.killSwitchOn)
         #expect(s.lastError != nil)
+        #expect(!(await h.world.blocking), "still blocking after a failed start")
+        #expect(await h.world.anchorRules == nil)
+        #expect(await h.world.tokens.isEmpty, "pf reference leaked")
         let log = await h.world.log
-        #expect(!log.contains { $0.hasPrefix("pf.load") || $0 == "pf.enable" }, "pf touched on a failed start: \(log)")
+        if failure == "check" || failure == "foreign" {
+            #expect(!log.contains { $0.hasPrefix("pf.load") || $0 == "pf.enable" }, "pf touched before the checks passed: \(log)")
+        }
         #expect(await h.world.running.isEmpty, "sing-box left running")
         #expect(h.store.load()?.wantConnected == false)
     }
@@ -192,7 +232,7 @@ import Testing
         try await h.controller.start()
         let log = await h.world.log
         let lock = try #require(log.firstIndex(of: "pf.enable"))
-        let dns = try #require(log.firstIndex(of: "dns.override"))
+        let dns = try #require(log.firstIndex { $0.hasPrefix("dns.override") })
         #expect(lock < dns, "after the tunnel is proven and locked")
         #expect(await h.world.dnsOverridden)
         await h.controller.stop()
@@ -206,7 +246,44 @@ import Testing
         let h = Harness()
         await h.world.set { $0.launchFails = true }
         try? await h.controller.start()
-        #expect(!(await h.world.log.contains("dns.override")))
+        #expect(!(await h.world.log.contains { $0.hasPrefix("dns.override") }))
+        #expect(!(await h.world.dnsGuard), "local DNS guard left after a failed start")
+    }
+
+    /// sing-box answers DNS on the Mac's port 53 and macOS is pointed at
+    /// each interface's own address, so queries macOS scopes to an
+    /// interface are answered too. The guard keeping that port to the Mac
+    /// goes up before sing-box starts, and down with the VPN.
+    @Test func localDNSIsGuardedFromBeforeStartToStop() async throws {
+        let h = Harness()
+        try await h.controller.start()
+        let log = await h.world.log
+        let guarded = try #require(log.firstIndex(of: "dns.guard"))
+        let launch = try #require(log.firstIndex { $0.hasPrefix("engine.launch") })
+        #expect(guarded < launch)
+        #expect(log.contains("dns.override(local)"))
+        #expect(await h.world.dnsLocal)
+        #expect(await h.world.dnsGuard)
+        await h.controller.stop()
+        #expect(!(await h.world.dnsGuard))
+        try await h.controller.start()
+        await h.controller.panic()
+        #expect(!(await h.world.dnsGuard), "Emergency Restore lifts the guard too")
+        try await h.controller.start()
+        await h.controller.shutdownForExit()
+        #expect(!(await h.world.dnsGuard), "a helper stop lifts it (sing-box is gone)")
+    }
+
+    /// Port 53 already in use (a local DNS server): the tunnel address as
+    /// before, no guard, and the VPN still connects.
+    @Test func portTakenFallsBackToTheTunnelAddress() async throws {
+        let h = Harness()
+        await h.world.set { $0.port53Taken = true }
+        try await h.controller.start()
+        #expect(await h.controller.status.phase == .connected)
+        #expect(await h.world.log.contains("dns.override"))
+        #expect(!(await h.world.dnsLocal))
+        #expect(!(await h.world.dnsGuard))
     }
 
     @Test func aHelperRestartPutsLeftoverDNSBack() async {

@@ -1,14 +1,16 @@
 import Foundation
 
 /// Hides what in a log could identify a user or their servers, for sharing
-/// it (in an issue, say): IP addresses, host names, and the names they gave
-/// profiles, routes and servers (written in “quotes” by the helper).
+/// it (in an issue, say): IP addresses, host names, the names they gave
+/// profiles, routes and servers (written in “quotes” by the helper), and
+/// their account name in paths (/Users/name/…).
 enum LogRedactor {
     static func redact(_ text: String) -> String {
         var s = text
         let rules: [(String, String)] = [
             (#"(?m)^(# Silent Route session · profile: ).*$"#, "$1‹profile›"),
             (#"“[^”]*”"#, "“‹name›”"),
+            (#"/Users/[^/\s:"']+"#, "/Users/‹user›"),
             (#"\b(?:\d{1,3}\.){3}\d{1,3}\b"#, "‹ip›"),
             // IPv6: at least three colons, or "::". Times (12:03:09) have two.
             (#"(?i)(?<![0-9a-f:])(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}(?![0-9a-f:])"#, "‹ip›"),

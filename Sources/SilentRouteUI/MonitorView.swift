@@ -10,7 +10,21 @@ struct MonitorView: View {
     let monitor: TrafficMonitor
     @State private var view: Mode = .apps
     @State private var search = ""
+    @State private var range: ChartRange = .session
     @State private var connOrder = [KeyPathComparator(\TrafficMonitor.Connection.downRate, order: .reverse)]
+
+    /// How much of the session the chart shows.
+    enum ChartRange: String, CaseIterable, Identifiable {
+        case minutes = "2 Min", hour = "1 Hour", session = "Session"
+        var id: Self { self }
+        var seconds: TimeInterval? {
+            switch self {
+            case .minutes: 120
+            case .hour: 3600
+            case .session: nil
+            }
+        }
+    }
 
     enum Mode: String, CaseIterable, Identifiable {
         case apps = "Apps", connections = "Connections"
@@ -29,7 +43,6 @@ struct MonitorView: View {
                                        description: Text("Turn the VPN on to see live traffic: which apps talk to which sites, by which route and server."))
             }
         }
-        .navigationTitle("Monitor")
     }
 
     /// Laid out as Activity Monitor's Network tab: the list, edge to edge,
@@ -74,8 +87,8 @@ struct MonitorView: View {
     private var summary: some View {
         HStack(alignment: .center, spacing: 24) {
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
-                figure("Download:", Format.speed(monitor.current?.down ?? 0), .blue)
-                figure("Upload:", Format.speed(monitor.current?.up ?? 0), .orange)
+                figure("Download:", Format.speed(model.speed?.down ?? 0), .blue)
+                figure("Upload:", Format.speed(model.speed?.up ?? 0), .orange)
                 figure("Connections:", "\(monitor.connections.count)")
                 Divider().gridCellUnsizedAxes(.horizontal)
                 figure("Data received:", Format.bytes(monitor.downloadTotal))
@@ -83,10 +96,20 @@ struct MonitorView: View {
             }
             .font(.callout)
             .fixedSize()
-            chart
-                .frame(height: 170)
-                .padding(10)
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+            VStack(alignment: .trailing, spacing: 6) {
+                Picker("Show", selection: $range) {
+                    ForEach(ChartRange.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .controlSize(.small)
+                .help("How much of this VPN session the chart shows — it is recorded from the moment the VPN was turned on")
+                chart
+                    .frame(height: 170)
+                    .padding(10)
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+            }
         }
         .padding(16)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -100,13 +123,15 @@ struct MonitorView: View {
         }
     }
 
-    /// Always the last two minutes, filling in from the right as data
-    /// arrives (as in Activity Monitor) — never a few points stretched
-    /// across the whole width.
+    /// The session's speed, recorded from the moment the VPN was turned on
+    /// — also while Monitor was closed. A fixed span (two minutes, an hour)
+    /// fills in from the right as data arrives, as in Activity Monitor.
     private var chart: some View {
-        let end = monitor.samples.last?.time ?? .now
+        let points = model.history.points(within: range.seconds)
+        let end = points.last?.time ?? .now
+        let start = range.seconds.map { end.addingTimeInterval(-$0) } ?? points.first?.time ?? end.addingTimeInterval(-120)
         return Chart {
-            ForEach(monitor.samples) { s in
+            ForEach(points) { s in
                 AreaMark(x: .value("Time", s.time), y: .value("Speed", s.down), series: .value("Direction", "Download"))
                     .foregroundStyle(.blue.opacity(0.25))
                     .interpolationMethod(.monotone)
@@ -118,16 +143,23 @@ struct MonitorView: View {
                     .interpolationMethod(.monotone)
             }
         }
-        .chartXScale(domain: end.addingTimeInterval(-TrafficMonitor.window)...end)
+        .chartXScale(domain: start...max(end, start.addingTimeInterval(1)))
         .chartYAxis {
             AxisMarks(position: .leading) { v in
                 AxisGridLine()
                 AxisValueLabel { if let b = v.as(Int64.self) { Text(Format.speed(b)) } }
             }
         }
-        .chartXAxis(.hidden)
+        // Times along the bottom: for an hour or a session, when things
+        // happened is the point.
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.hour().minute())
+            }
+        }
         .overlay {
-            if monitor.samples.count < 2 { Text("Collecting…").font(.caption).foregroundStyle(.secondary) }
+            if points.count < 2 { Text("Collecting…").font(.caption).foregroundStyle(.secondary) }
         }
     }
 
@@ -188,7 +220,7 @@ struct MonitorView: View {
             TableColumn("↓ Speed", value: \.downRate) { c in Text(Format.speed(c.downRate)).monospacedDigit() }.width(85)
             TableColumn("↑ Speed", value: \.upRate) { c in Text(Format.speed(c.upRate)).monospacedDigit() }.width(85)
             TableColumn("Time", value: \.start) { c in
-                Text(Format.uptime(since: c.start, now: monitor.current?.time ?? Date())).monospacedDigit().foregroundStyle(.secondary)
+                Text(Format.uptime(since: c.start, now: Date())).monospacedDigit().foregroundStyle(.secondary)
             }
             .width(60)
         }

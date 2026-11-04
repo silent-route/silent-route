@@ -16,6 +16,8 @@ struct LogsView: View {
     @State private var search = ""
     @State private var loaded = false
     @State private var saving: LogDocument?
+    /// The file name offered when saving: the chosen session's by default.
+    @State private var savingName: String?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -24,12 +26,13 @@ struct LogsView: View {
             Divider()
             content
         }
-        .navigationTitle("Logs")
         .task { await refreshList(selectNewest: true) }
         .task(id: selected) { await follow() }
         .fileExporter(isPresented: Binding(get: { saving != nil }, set: { if !$0 { saving = nil } }),
                       document: saving, contentType: .plainText,
-                      defaultFilename: selected.map { $0.replacingOccurrences(of: ".log", with: "") } ?? "Silent Route log") { _ in }
+                      defaultFilename: savingName ?? selected.map { $0.replacingOccurrences(of: ".log", with: "") } ?? "Silent Route log") { _ in
+            savingName = nil
+        }
     }
 
     // MARK: Sessions
@@ -44,8 +47,42 @@ struct LogsView: View {
                 List(sessions, selection: $selected) { s in
                     SessionRow(session: s).tag(s.id)
                 }
+                .contextMenu(forSelectionType: LogSession.ID.self) { ids in
+                    if let id = ids.first, ids.count == 1 { menu(for: id) }
+                }
                 .listStyle(.sidebar)
             }
+        }
+    }
+
+    /// Right-click on a session: export it, find it, or move it to the
+    /// Trash — not the one still being written.
+    @ViewBuilder
+    private func menu(for id: LogSession.ID) -> some View {
+        let running = sessions.first { $0.id == id }?.ended == nil
+        Button("Export…") { export(id, redacted: false) }
+        Button("Export Without Addresses…") { export(id, redacted: true) }
+        Button("Show in Finder") {
+            if let url = store.url(of: id) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        }
+        Divider()
+        Button("Move to Trash") {
+            let store = self.store
+            Task {
+                _ = await Task.detached { store.moveToTrash(id) }.value
+                if selected == id { selected = nil }
+                await refreshList(selectNewest: true)
+            }
+        }
+        .disabled(running)
+    }
+
+    private func export(_ id: LogSession.ID, redacted: Bool) {
+        let store = self.store
+        Task {
+            guard let text = await Task.detached(operation: { store.text(of: id) }).value else { return }
+            savingName = id.replacingOccurrences(of: ".log", with: "")
+            saving = LogDocument(text: redacted ? LogRedactor.redact(text) : text)
         }
     }
 
@@ -134,7 +171,9 @@ struct LogsView: View {
         guard let id = selected else { text = ""; return }
         let store = self.store
         text = await Task.detached { store.text(of: id) }.value ?? ""
-        while !Task.isCancelled, sessions.first(where: { $0.id == id })?.ended == nil {
+        // Only a session that is still going is followed (one that is gone
+        // is not "still going").
+        while !Task.isCancelled, let s = sessions.first(where: { $0.id == id }), s.ended == nil {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
             if let t = await Task.detached(operation: { store.text(of: id) }).value, t != text { text = t }

@@ -92,8 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// A menu command for the main window: shown first, so it is there to act.
     func command(_ c: WindowCommand) {
+        let fresh = mainWindow == nil
         showMainWindow()
-        DispatchQueue.main.async { c.post() }
+        // A window made just now listens once its view has appeared.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (fresh ? 0.3 : 0)) { c.post() }
     }
 
     func openHelp() {
@@ -171,6 +173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Main window
 
+    static let defaultWidth: CGFloat = 1040
+
     func showMainWindow() {
         panel?.dismiss()
         if mainWindow == nil {
@@ -178,16 +182,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             host.sceneBridgingOptions = [.toolbars, .title]
             let w = NSWindow(contentViewController: host)
             w.title = "Silent Route"
-            // Each page shows its own title in its content; the toolbar
-            // keeps its room for the controls (the name stays in the
-            // Window menu and Mission Control).
-            w.titleVisibility = .hidden
             w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-            w.setContentSize(NSSize(width: 1000, height: 680))
+            w.setContentSize(NSSize(width: Self.defaultWidth, height: 680))
             w.isReleasedWhenClosed = false
             w.delegate = self
             w.setFrameAutosaveName("SilentRouteMain")
-            if !w.setFrameUsingName("SilentRouteMain") { w.center() }
+            if !w.setFrameUsingName("SilentRouteMain") {
+                w.center()
+            } else if w.contentRect(forFrameRect: w.frame).width == 1000 {
+                // Still the earlier default size (never resized): the new
+                // default, a little wider, about the same centre.
+                var f = w.frame
+                f.origin.x -= (Self.defaultWidth - 1000) / 2
+                f.size.width += Self.defaultWidth - 1000
+                w.setFrame(f, display: false)
+            }
             mainWindow = w
         }
         mainWindow?.makeKeyAndOrderFront(nil)

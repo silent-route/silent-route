@@ -16,7 +16,7 @@ Everything Silent Route sends or lets through, by whom, where to, and when. It c
 | What | From → to | Path | When |
 |---|---|---|---|
 | Your apps' traffic | Any app → sites and services | Into the tunnel interface, then by your routes: through a server, direct, or blocked | VPN on |
-| Your apps' DNS | macOS resolver → `172.19.0.6` (inside the tunnel) → sing-box | By the profile's DNS rules (see [DNS](#dns)) | VPN on |
+| Your apps' DNS | macOS resolver → sing-box on this Mac's port 53 (each network service's own address; `172.19.0.6` inside the tunnel if port 53 is taken) | By the profile's DNS rules (see [DNS](#dns)) | VPN on |
 | A route's DNS | sing-box → the profile's DNS-over-HTTPS server (default `1.1.1.1:443`) | Through that route's server, so a name is looked up where its traffic goes | Names of routes that go through servers, and of *Everything else* |
 | Direct DNS | sing-box → the profile's direct resolver (default `1.1.1.1:53`, UDP) | Direct | Names of routes that go direct, *Always resolved directly* zones, and your servers' own host names |
 | Local names | sing-box → your router's DNS, as DHCP gives it | Direct, over the local network | Only names in the profile's local zones (default `lan`, `home.arpa`, `internal`), and only while the local network is reachable directly |
@@ -41,11 +41,15 @@ While any route through servers has its kill switch on, pf (macOS's packet filte
 4. **The local network** (printers, AirDrop, a NAS), if the profile allows it. **DNS (ports 53 and 853) to the local network is the exception**: only sing-box may ask the router, so nothing else can show it the names you look up.
 5. **IPv6 link-local and multicast** (needed by macOS for the local network), again without DNS.
 
-Everything else is dropped. It stays that way while sing-box restarts, so nothing slips out during a reconnect. pf is changed only through Silent Route's own anchor (`com.apple/silentroute`); the system's rules and other VPNs' rules are never touched.
+Everything else is dropped. Blocking starts the moment you turn the VPN on — before sing-box runs — and the servers are proven behind it, so nothing goes out past the tunnel while it connects. If the VPN cannot connect, the block is lifted and the network is as it was. It stays on while sing-box restarts, so nothing slips out during a reconnect. Only routes that are turned on count: a kill switch on a route that is off blocks nothing, and with no kill switch on any active route the network is never blocked. pf is changed only through Silent Route's own anchor (`com.apple/silentroute`); the system's rules and other VPNs' rules are never touched.
 
 ## DNS
 
-While the VPN is on, macOS's resolver is pointed at `172.19.0.6`, an address inside the tunnel, where sing-box answers. Without this, most networks would send every lookup to the router, past the tunnel, and the router and the provider behind it would see every site you open.
+While the VPN is on, macOS's resolver is pointed at sing-box. Without this, most networks would send every lookup to the router, past the tunnel, and the router and the provider behind it would see every site you open.
+
+- sing-box answers DNS on port 53 of this Mac, and each network service (Wi-Fi, Ethernet) is given its own interface's address as its DNS server. macOS also asks DNS *scoped* to an interface — its own network checks do — and such a query only reaches an address on that interface. An address inside the tunnel (`172.19.0.6`, used before 1.3.4) never answered them: macOS then took the Wi-Fi for broken and reset it every half hour or so, cutting every connection.
+- That port answers this Mac only: a separate pf anchor (`com.apple/silentroute-dns`) drops DNS coming in from the network, while the VPN is on — with or without a kill switch. Other devices on the same network cannot use or probe it.
+- If something else already listens on port 53 (a local DNS server), Silent Route uses `172.19.0.6` inside the tunnel instead, as before.
 
 - The change is made only in macOS's live network state, never in your saved network settings. It is undone when the VPN turns off, on Emergency Restore, and when the helper stops. A restart of the Mac starts from your own settings, untouched.
 - What was there before is saved on disk. If the helper crashes, it puts it back when it starts again.

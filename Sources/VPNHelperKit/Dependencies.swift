@@ -46,9 +46,18 @@ public protocol NetworkInspector: Sendable {
     /// Panic cleanup: put the default route back on a physical gateway if it
     /// still points at a dead tunnel, and flush the DNS cache.
     func restoreRouting() async
-    /// While connected: macOS's resolver points at `server` (inside the
-    /// tunnel). Harmless to repeat; re-applied after network changes.
-    func overrideDNS(server: String) async
+    /// While connected: macOS's resolver points into sing-box. With
+    /// `local`, each network service gets its own interface address (where
+    /// sing-box answers on port 53), so queries macOS scopes to an interface
+    /// are answered too; otherwise `server` (inside the tunnel). Harmless to
+    /// repeat; re-applied after network changes.
+    func overrideDNS(server: String, local: Bool) async
+    /// Before sing-box answers DNS on this Mac's port 53: the port must be
+    /// free, and DNS coming in from anywhere but the Mac itself refused (a
+    /// separate pf anchor). False if either cannot be done.
+    func prepareLocalDNS() async -> Bool
+    /// Lifts that refusal.
+    func releaseLocalDNS() async
     /// Puts macOS's own DNS settings back (also after a crash).
     func restoreDNS() async
     /// Whether the network wants a login before anything gets through,

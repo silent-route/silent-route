@@ -38,6 +38,7 @@ BUNDLE_ID="org.silentroute.app"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
 GROUP="_silentroute"
 ANCHOR="com.apple/silentroute"
+DNS_ANCHOR="com.apple/silentroute-dns"
 
 note() { echo "• $*"; }
 
@@ -61,6 +62,7 @@ stop_helper() {
 release_block() {
   local token
   pfctl -a "$ANCHOR" -F all >/dev/null 2>&1 || true
+  pfctl -a "$DNS_ANCHOR" -F all >/dev/null 2>&1 || true
   if [ -f "$ROOT/state.json" ]; then
     token=$(plutil -extract pfToken raw -o - "$ROOT/state.json" 2>/dev/null || true)
     case "$token" in

@@ -43,6 +43,12 @@ public struct SystemPacketFilter: PacketFilter {
         await Command.run(pfctl, ["-X", token])
     }
 
+    /// Whether the anchor has any rules at all.
+    func isLoadedRules() async -> Bool {
+        let r = await Command.run(pfctl, ["-a", anchor, "-s", "rules"])
+        return r.ok && !r.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     public func isLoaded() async -> Bool {
         let r = await Command.run(pfctl, ["-a", anchor, "-s", "rules"])
         return r.ok && r.text.contains("block drop out quick all")
