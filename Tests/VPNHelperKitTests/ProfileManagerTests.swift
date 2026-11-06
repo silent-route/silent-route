@@ -239,4 +239,29 @@ import Testing
         #expect(prev.profiles.map(\.name) == ["One"])
         #expect(store.load().profiles.map(\.name) == ["One", "Two"])
     }
+
+    /// Detailed logs: off by default; once chosen, kept by the helper for
+    /// that user, and used from their next session — a session keeps the
+    /// level it began with.
+    @Test func detailedLogsApplyFromTheNextSession() async throws {
+        let (h, m, _, work) = try await Self.setUp()
+        #expect(await m.detailedLogs(of: Self.me) == false)
+        try await m.start(by: Self.me)
+        #expect(await h.world.logLevel == "warn")
+
+        await m.setDetailedLogs(true, by: Self.me)
+        // The running session keeps its level, also across a switch.
+        try await m.activate(work.id, by: Self.me)
+        #expect(await h.wait(for: .connected))
+        #expect(await h.world.logLevel == "warn")
+
+        await h.controller.stop()
+        try await m.start(by: Self.me)
+        #expect(await h.world.logLevel == "info")
+
+        // Kept across a helper restart.
+        let again = ProfileManager(controller: h.controller, usersDir: m.usersDir, ownerFile: m.ownerFile)
+        #expect(await again.detailedLogs(of: Self.me))
+        #expect(await again.detailedLogs(of: 502) == false, "another user's choice is their own")
+    }
 }

@@ -459,6 +459,8 @@ import Testing
 
         await h.world.set { $0.deadTags = [SingBoxConfig.tag(a)] }
         await h.controller.healthTick()
+        #expect(await Self.via(h, def) == .server(a), "one lost check does not move the route")
+        await h.controller.healthTick()
         #expect(await Self.via(h, def) == .server(b))
         #expect(await h.world.selections[SingBoxConfig.routeTag(def)] == SingBoxConfig.tag(b))
         #expect(await h.controller.status.phase == .connected, "moving to the next server is not a reconnect")
@@ -481,9 +483,27 @@ import Testing
         try await h.controller.start()
         await h.world.set { $0.deadTags = [SingBoxConfig.tag(Harness.h2b.id)] }
         await h.controller.healthTick()
+        #expect(await Self.via(h, route.id) == .server(Harness.h2b.id), "one lost check blocks nothing")
+        await h.controller.healthTick()
         #expect(await Self.via(h, route.id) == (killSwitch ? .blocked : .direct))
         #expect(await h.world.selections[SingBoxConfig.routeTag(route.id)]
                 == (killSwitch ? SingBoxConfig.tag(Harness.h2b.id) : "direct"))
+        #expect(await h.controller.status.phase == .connected)
+    }
+
+    /// A server that misses one check and answers the next keeps its
+    /// routes all along: no block, no move, nothing in the log.
+    @Test func aSingleLostCheckChangesNothing() async throws {
+        let h = Harness()
+        try await h.controller.start()
+        let def = await h.controller.profile.defaultRoute.id
+        let selects = await h.world.log.filter { $0 == "engine.select" }.count
+        await h.world.set { $0.deadTags = [SingBoxConfig.tag(Harness.h2.id), SingBoxConfig.tag(Harness.h2b.id)] }
+        await h.controller.healthTick()
+        await h.world.set { $0.deadTags = [] }
+        await h.controller.healthTick()
+        #expect(await Self.via(h, def) == .server(Harness.h2.id))
+        #expect(await h.world.log.filter { $0 == "engine.select" }.count == selects)
         #expect(await h.controller.status.phase == .connected)
     }
 

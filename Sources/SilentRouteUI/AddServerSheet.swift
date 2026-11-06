@@ -140,6 +140,14 @@ struct AddServerSheet: View {
             TextField("Username", text: $draft.username, prompt: Text("optional"))
             SecureField("Password", text: $draft.password, prompt: Text("optional"))
         }
+        if draft.proxyType == .socks5 {
+            Section {
+                Toggle("UDP through this proxy", isOn: $draft.proxyUDP)
+                Text("Off by default, as in most clients. Each UDP connection — browsers use it for many sites (HTTP/3) — takes a connection of its own to the proxy, and many proxies limit those or carry UDP badly. Off, browsers use TCP instead; UDP of routes through this proxy does not get through. Turn it on for calls or games that need UDP, if the proxy supports it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
         if draft.proxyType == .https {
             Section("TLS") {
                 TextField("Server name (SNI)", text: $draft.sni, prompt: Text("defaults to the server"))

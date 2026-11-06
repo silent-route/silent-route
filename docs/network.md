@@ -20,7 +20,7 @@ Everything Silent Route sends or lets through, by whom, where to, and when. It c
 | A route's DNS | sing-box → the profile's DNS-over-HTTPS server (default `1.1.1.1:443`) | Through that route's server, so a name is looked up where its traffic goes | Names of routes that go through servers, and of *Everything else* |
 | Direct DNS | sing-box → the profile's direct resolver (default `1.1.1.1:53`, UDP) | Direct | Names of routes that go direct, *Always resolved directly* zones, and your servers' own host names |
 | Local names | sing-box → your router's DNS, as DHCP gives it | Direct, over the local network | Only names in the profile's local zones (default `lan`, `home.arpa`, `internal`), and only while the local network is reachable directly |
-| Server health checks | Helper → sing-box → each server in use → `www.gstatic.com/generate_204` (HTTP) | Through each server | Every 10 s while connected; every 2 s for a while after a network change |
+| Server health checks | Helper → sing-box → each server in use → `www.gstatic.com/generate_204` (HTTP) | Through each server | Every 10 s while connected; every 2 s for a while after a network change. A server in use counts as down after two missed checks in a row, so one lost check moves or blocks nothing |
 | Address and site lists | sing-box → `raw.githubusercontent.com:443` (SagerNet rule-sets) | Direct | The first time a profile uses a list, then weekly; cached |
 | Wi-Fi login check | Helper → `curl` → login proxy → `captive.apple.com:80` (HTTP) | Direct, with the router's DNS | Only while reconnecting behind the kill switch and no server answers |
 | Wi-Fi login page | Login window → login proxy → the network's login page | Direct, with the router's DNS | While a network wants a login and you have the window open |
@@ -39,7 +39,7 @@ While any route through servers has its kill switch on, pf (macOS's packet filte
 2. **Loopback** (`127.0.0.1`), and the tunnel interface itself.
 3. **DHCP**, so the Mac keeps its address on the network.
 4. **The local network** (printers, AirDrop, a NAS), if the profile allows it. **DNS (ports 53 and 853) to the local network is the exception**: only sing-box may ask the router, so nothing else can show it the names you look up.
-5. **IPv6 link-local and multicast** (needed by macOS for the local network), again without DNS.
+5. **IPv6 link-local and multicast** (needed by macOS for the local network), and **unique local IPv6** (`fd…` — a NAS or home server) if the profile allows the local network; again without DNS.
 
 Everything else is dropped. Blocking starts the moment you turn the VPN on — before sing-box runs — and the servers are proven behind it, so nothing goes out past the tunnel while it connects. If the VPN cannot connect, the block is lifted and the network is as it was. It stays on while sing-box restarts, so nothing slips out during a reconnect. Only routes that are turned on count: a kill switch on a route that is off blocks nothing, and with no kill switch on any active route the network is never blocked. pf is changed only through Silent Route's own anchor (`com.apple/silentroute`); the system's rules and other VPNs' rules are never touched.
 

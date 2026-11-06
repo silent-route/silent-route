@@ -55,6 +55,8 @@ public enum SingBoxConfig {
         }
     }
 
+    /// How long connecting to a server may take (see `outbound`).
+    static let serverConnectTimeout = "15s"
     static let captiveTag = "captive-in"
     /// The inbound answering DNS on port 53 of this Mac.
     static let localDNSTag = "dns-in"
@@ -443,6 +445,10 @@ public enum SingBoxConfig {
             "tag": .string(tag),
             "server": .string(t.server.host),
             "server_port": .int(Int(t.server.port)),
+            // sing-box gives up on connecting to a server after 5 s. A busy
+            // proxy can take longer to accept and still work — other clients
+            // just wait — so a slow server stays slow rather than failing.
+            "connect_timeout": .string(serverConnectTimeout),
         ]
         if IPNetwork.parseV4(t.server.host) == nil, IPNetwork.parseV6(t.server.host) == nil {
             // Tunnel servers are always resolved outside every tunnel.
@@ -481,6 +487,8 @@ public enum SingBoxConfig {
             case .socks5:
                 o["type"] = "socks"
                 o["version"] = "5"
+                // UDP only when asked for (see Proxy.udp).
+                if !p.udp { o["network"] = "tcp" }
             case .http:
                 o["type"] = "http"
                 if let t = p.tls { o["tls"] = tls(t) }

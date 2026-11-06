@@ -14,7 +14,7 @@ import VPNRuntime
 public enum IPC {
     /// Bumped on any incompatible change; the app asks to reinstall the
     /// helper on a mismatch.
-    public static let protocolVersion = 9
+    public static let protocolVersion = 10
     public static let machService = "org.silentroute.app.helper"
 
     /// Clients the helper accepts. Each must be signed by the same
@@ -40,6 +40,9 @@ public enum IPC {
         /// Check a server the way the VPN reaches it: directly, past the
         /// tunnel and the kill switch (the helper runs the check).
         case probe(Tunnel)
+        /// This user's sessions log every connection (sing-box at "info"),
+        /// from their next session on.
+        case setDetailedLogs(Bool)
     }
 
     public struct Envelope: Codable, Sendable {
@@ -69,6 +72,8 @@ public enum IPC {
         public var captiveProxy: SingBoxConfig.LocalProxy?
         /// Only for probe.
         public var probe: Probe.Report?
+        /// This user's sessions log every connection (see setDetailedLogs).
+        public var detailedLogs: Bool?
 
         public init(error: String? = nil, status: VPNStatus? = nil, activeProfile: ProfileRef? = nil,
                     libraryRevision: Int? = nil, library: ProfileLibrary? = nil, api: APICredentials? = nil,

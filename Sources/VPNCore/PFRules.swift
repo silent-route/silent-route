@@ -79,8 +79,12 @@ public enum PFRules {
             ]
         }
         lines.append("block drop out quick inet6 proto { tcp udp } to { fe80::/10, fc00::/7, ff00::/8 } port { 53, 853 }")
+        // IPv6 of the local network: link-local and multicast always (macOS
+        // needs them); unique local addresses (fd…: a NAS, a printer, a home
+        // server) when the local network is reachable, as its IPv4 is.
+        let lan6 = env.lan == .allow ? "fe80::/10, fc00::/7, ff00::/8" : "fe80::/10, ff00::/8"
         lines += [
-            "pass out quick inet6 to { fe80::/10, ff00::/8 } flags any keep state",
+            "pass out quick inet6 to { \(lan6) } flags any keep state",
             "block drop out quick all",
             "",
         ]

@@ -476,12 +476,32 @@ public struct Proxy: Codable, Hashable, Sendable {
     public var password: String?
     /// HTTPS proxy (TLS to the proxy). SOCKS5 has no TLS.
     public var tls: TLS?
+    /// SOCKS5 only: UDP through the proxy (UDP ASSOCIATE). Off by default,
+    /// as in most clients: each UDP flow (QUIC, HTTP/3 — Google uses it
+    /// everywhere) holds a connection of its own to the proxy, and many
+    /// proxies limit those or do not carry UDP well. Without it, browsers
+    /// use TCP instead; UDP for such a route does not get through (nothing
+    /// goes past the tunnel). An HTTP proxy never carries UDP.
+    public var udp: Bool
 
-    public init(kind: Kind, username: String? = nil, password: String? = nil, tls: TLS? = nil) {
+    public init(kind: Kind, username: String? = nil, password: String? = nil, tls: TLS? = nil, udp: Bool = false) {
         self.kind = kind
         self.username = username
         self.password = password
         self.tls = tls
+        self.udp = udp
+    }
+
+    enum CodingKeys: String, CodingKey { case kind, username, password, tls, udp }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        username = try c.decodeIfPresent(String.self, forKey: .username)
+        password = try c.decodeIfPresent(String.self, forKey: .password)
+        tls = try c.decodeIfPresent(TLS.self, forKey: .tls)
+        // Profiles from before this setting: off, the new default.
+        udp = try c.decodeIfPresent(Bool.self, forKey: .udp) ?? false
     }
 }
 

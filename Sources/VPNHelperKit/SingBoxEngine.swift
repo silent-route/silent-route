@@ -186,18 +186,18 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
     }
 
     public func delay(_ tag: String) async -> Int? {
-        // sing-box itself fetches the URL through that outbound.
+        // sing-box itself fetches the URL through that outbound. Up to 10 s:
+        // a busy server answering slowly is slow, not dead (it may need most
+        // of that just to accept the connection). One try: a server counts
+        // as down only after two missed checks in a row (the controller).
         let url = "https://www.gstatic.com/generate_204"
-        let q = "url=\(url.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? url)&timeout=5000"
-        for _ in 0..<2 {
-            if let (code, data) = try? await request("GET", "/proxies/\(tag)/delay?\(q)", timeout: 7), code == 200,
-               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let ms = (obj["delay"] as? NSNumber)?.intValue, ms > 0 {
-                return ms
-            }
-        }
-        return nil
+        let q = "url=\(url.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? url)&timeout=10000"
+        guard let (code, data) = try? await request("GET", "/proxies/\(tag)/delay?\(q)", timeout: 12), code == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ms = (obj["delay"] as? NSNumber)?.intValue, ms > 0 else { return nil }
+        return ms
     }
+
 
     /// Keep the log bounded: at 5 MB the current file becomes .1.
     func rotateLog() {

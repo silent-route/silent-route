@@ -25,6 +25,13 @@ actor World {
     var deadTags: Set<String> = []
     /// selector → member, as set through the clash API.
     var selections: [String: String] = [:]
+    /// The config sing-box was last started with.
+    var lastConfig: Data?
+    /// Its log level.
+    var logLevel: String? {
+        guard let d = lastConfig, let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+        return (o["log"] as? [String: Any])?["level"] as? String
+    }
     // network
     var foreign: String?
     var routingRestored = 0
@@ -92,6 +99,7 @@ struct FakeEngine: Engine {
         if await world.checkFails { throw TestError("bad config") }
     }
     func launch(config: Data, onExit: @escaping @Sendable (Int32) -> Void) async throws -> Int32 {
+        await world.set { $0.lastConfig = config }
         if await world.launchFails { await world.record("engine.launch(failed)"); throw TestError("launch failed") }
         let pid = await world.set2 { w in
             let pid = w.nextPID

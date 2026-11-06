@@ -94,6 +94,7 @@
   },
   "outbounds" : [
     {
+      "connect_timeout" : "15s",
       "domain_resolver" : "dns-direct",
       "obfs" : {
         "password" : "obfs",
@@ -113,6 +114,7 @@
       "type" : "hysteria2"
     },
     {
+      "connect_timeout" : "15s",
       "flow" : "xtls-rprx-vision",
       "server" : "203.0.113.10",
       "server_port" : 443,

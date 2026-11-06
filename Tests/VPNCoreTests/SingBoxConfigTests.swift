@@ -280,6 +280,24 @@ enum Fixtures {
         #expect(SingBoxConfig.appRegex(.bundle(path: "/Applications/X.app/")) == #"^/Applications/X\.app/"#)
         #expect(SingBoxConfig.appRegex(.processName("a.b")) == #"/a\.b$"#)
     }
+
+    /// SOCKS5 carries TCP only unless UDP is asked for; HTTP never has UDP.
+    @Test func socksUDPOnlyWhenAsked() throws {
+        func outbound(_ p: Proxy) -> JSON {
+            SingBoxConfig.outbound(Tunnel(name: "p", server: Endpoint(host: "198.51.100.7", port: 1080), proto: .proxy(p)), tag: "t")
+        }
+        #expect(outbound(Proxy(kind: .socks5))["network"] == "tcp")
+        #expect(outbound(Proxy(kind: .socks5, udp: true))["network"] == nil)
+        #expect(outbound(Proxy(kind: .http))["network"] == nil)
+    }
+
+    /// Profiles saved before the setting existed read as UDP off.
+    @Test func oldProxyReadsWithUDPOff() throws {
+        let p = try JSONDecoder().decode(Proxy.self, from: Data(#"{"kind":"socks5","username":"u"}"#.utf8))
+        #expect(p.udp == false && p.username == "u")
+        let back = try JSONDecoder().decode(Proxy.self, from: JSONEncoder().encode(Proxy(kind: .socks5, udp: true)))
+        #expect(back.udp)
+    }
 }
 
 extension JSON {

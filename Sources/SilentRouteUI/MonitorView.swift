@@ -13,6 +13,11 @@ struct MonitorView: View {
     @State private var range: ChartRange = .session
     @State private var connOrder = [KeyPathComparator(\TrafficMonitor.Connection.downRate, order: .reverse)]
 
+    /// Download purple, upload teal-blue: system colours, so they suit the
+    /// light and the dark appearance alike.
+    static let downColor = Color.purple
+    static let upColor = Color.teal
+
     /// How much of the session the chart shows.
     enum ChartRange: String, CaseIterable, Identifiable {
         case minutes = "2 Min", hour = "1 Hour", session = "Session"
@@ -87,8 +92,8 @@ struct MonitorView: View {
     private var summary: some View {
         HStack(alignment: .center, spacing: 24) {
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
-                figure("Download:", Format.speed(model.speed?.down ?? 0), .blue)
-                figure("Upload:", Format.speed(model.speed?.up ?? 0), .orange)
+                figure("Download:", Format.speed(model.speed?.down ?? 0), Self.downColor)
+                figure("Upload:", Format.speed(model.speed?.up ?? 0), Self.upColor)
                 figure("Connections:", "\(monitor.connections.count)")
                 Divider().gridCellUnsizedAxes(.horizontal)
                 figure("Data received:", Format.bytes(monitor.downloadTotal))
@@ -133,13 +138,14 @@ struct MonitorView: View {
         return Chart {
             ForEach(points) { s in
                 AreaMark(x: .value("Time", s.time), y: .value("Speed", s.down), series: .value("Direction", "Download"))
-                    .foregroundStyle(.blue.opacity(0.25))
+                    .foregroundStyle(LinearGradient(colors: [Self.downColor.opacity(0.35), Self.downColor.opacity(0.05)],
+                                                    startPoint: .top, endPoint: .bottom))
                     .interpolationMethod(.monotone)
                 LineMark(x: .value("Time", s.time), y: .value("Speed", s.down), series: .value("Direction", "Download"))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Self.downColor)
                     .interpolationMethod(.monotone)
                 LineMark(x: .value("Time", s.time), y: .value("Speed", s.up), series: .value("Direction", "Upload"))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Self.upColor)
                     .interpolationMethod(.monotone)
             }
         }

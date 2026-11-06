@@ -15,10 +15,20 @@ import Testing
         block drop out quick inet proto { tcp udp } to { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 255.255.255.255/32 } port { 53, 853 }
         pass out quick inet to { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 255.255.255.255/32 } flags any keep state
         block drop out quick inet6 proto { tcp udp } to { fe80::/10, fc00::/7, ff00::/8 } port { 53, 853 }
-        pass out quick inet6 to { fe80::/10, ff00::/8 } flags any keep state
+        pass out quick inet6 to { fe80::/10, fc00::/7, ff00::/8 } flags any keep state
         block drop out quick all
 
         """)
+    }
+
+    /// Unique local IPv6 (fd…: a NAS, a home server) is reachable exactly
+    /// when the local network is; link-local and multicast always are.
+    @Test func uniqueLocalIPv6FollowsTheLANSetting() throws {
+        let allow = try PFRules.generate(.init(tunInterface: "utun7", singBoxGroup: 4242, lan: .allow))
+        let block = try PFRules.generate(.init(tunInterface: "utun7", singBoxGroup: 4242, lan: .block))
+        #expect(allow.contains("pass out quick inet6 to { fe80::/10, fc00::/7, ff00::/8 }"))
+        #expect(block.contains("pass out quick inet6 to { fe80::/10, ff00::/8 }"))
+        #expect(!block.contains("pass out quick inet6 to { fe80::/10, fc00::/7"))
     }
 
     @Test func blockedWithoutTunnelOrLAN() throws {

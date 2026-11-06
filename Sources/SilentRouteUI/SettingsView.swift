@@ -170,6 +170,12 @@ public struct SettingsView: View {
                 }
             }
             Section("Session Logs") {
+                Toggle("Log every connection", isOn: Binding(get: { model.detailedLogs },
+                                                             set: { on in Task { await model.setDetailedLogs(on) } }))
+                    .disabled(model.helper != .ready)
+                Text("Logs each connection — which app, which site, through which route and server — to track a problem down. Takes effect from the next session (the next time the VPN is turned on). Such logs grow faster and name every site you open; they stay readable only by you.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Toggle("Include logs in Time Machine backups", isOn: $logsInBackups)
                     .onChange(of: logsInBackups) { _, _ in Preferences.applyLogFolderSettings() }
                 Toggle("Let Spotlight index logs", isOn: $logsIndexed)

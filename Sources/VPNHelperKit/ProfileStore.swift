@@ -148,6 +148,37 @@ public actor ProfileManager {
         store.save(lib)
     }
 
+    // MARK: Per-user settings the helper applies
+
+    private var detailed: [uid_t: Bool] = [:]
+
+    private nonisolated func settingsURL(_ uid: uid_t) -> URL {
+        usersDir.appendingPathComponent(String(uid)).appendingPathComponent("settings.json")
+    }
+
+    /// Whether this user's sessions log every connection.
+    public func detailedLogs(of uid: uid_t) -> Bool {
+        if let d = detailed[uid] { return d }
+        struct Settings: Decodable { var detailedLogs: Bool? }
+        let d = (try? Data(contentsOf: settingsURL(uid))).flatMap { try? JSONDecoder().decode(Settings.self, from: $0) }?.detailedLogs ?? false
+        detailed[uid] = d
+        return d
+    }
+
+    /// Takes effect from this user's next session: a session keeps the
+    /// level it began with, so one log file has one level.
+    public func setDetailedLogs(_ on: Bool, by uid: uid_t) {
+        detailed[uid] = on
+        let url = settingsURL(uid)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        let data = (try? JSONSerialization.data(withJSONObject: ["detailedLogs": on])) ?? Data()
+        FileManager.default.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600])
+    }
+
+    /// The session's sing-box log level: every connection, or problems only.
+    public func logLevel(of uid: uid_t) -> String { detailedLogs(of: uid) ? "info" : "warn" }
+
     /// Turns the VPN on with this user's active profile, making them its
     /// owner. One start at a time: two users starting at the same moment
     /// cannot end up with one's profile and the other's ownership.
@@ -157,6 +188,7 @@ public actor ProfileManager {
         defer { starting = false }
         guard await controller.status.phase == .off else { throw Failure("The VPN is already on") }
         try await prepareStart(by: uid)
+        await controller.setLogLevel(logLevel(of: uid))
         beforeStart()
         do { try await controller.start() } catch { throw Failure(error.description) }
     }

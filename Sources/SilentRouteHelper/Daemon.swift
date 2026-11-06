@@ -79,7 +79,11 @@ enum Daemon {
             // The VPN runs its owner's profile (it may resume below), and a
             // resumed session's log is theirs.
             if let p = await profiles.ownerProfile() { try? await controller.update(profile: p) }
-            if let owner = await profiles.owner { sessionLog.setOwner(owner) }
+            if let owner = await profiles.owner {
+                sessionLog.setOwner(owner)
+                // A resumed session logs as its owner chose.
+                await controller.setLogLevel(await profiles.logLevel(of: owner))
+            }
             await controller.reconcileOnLaunch()
             log.info("helper ready")
         }
@@ -257,6 +261,7 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                              libraryRevision: await profiles.revision(of: uid),
                              library: library ? lib : nil, api: api, helperVersion: version)
         r.otherUsersVPN = mine ? nil : true
+        r.detailedLogs = await profiles.detailedLogs(of: uid)
         return r
     }
 
@@ -314,6 +319,8 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 var r = await respond(uid)
                 r.probe = report
                 return r
+            case .setDetailedLogs(let on):
+                await profiles.setDetailedLogs(on, by: uid)
             case .captiveLogin:
                 // A way past the kill switch for one window: the owner's alone.
                 let owner = await profiles.owner

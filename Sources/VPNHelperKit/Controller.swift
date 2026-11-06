@@ -37,6 +37,10 @@ public actor Controller {
         public var restartAfterSeconds: Double = 12
         /// After a network change, how often to look until servers answer.
         public var probeIntervalSeconds: Double = 2
+        /// Failed checks in a row before a server that was answering counts
+        /// as down: one lost check (a dropped packet, a busy moment) does
+        /// not move or block its routes.
+        public var failAfterChecks = 2
         /// Localhost port for the Wi-Fi login-page proxy; nil: none.
         public var captivePort: UInt16?
         /// While a network wants a login: how often to look whether the
@@ -94,6 +98,9 @@ public actor Controller {
     private var latency: [UUID: Int?] = [:]
     /// Where each route's selector points now.
     private var via: [UUID: RouteState.Via] = [:]
+    /// Servers counted as answering, and each one's failed checks in a row.
+    private var alive: Set<UUID> = []
+    private var strikes: [UUID: Int] = [:]
     /// Consecutive checks in which no exit at all answered.
     /// The session log's ear: told when a session begins and ends and what
     /// happens in between. Set by the daemon; nil in most tests.
@@ -146,6 +153,11 @@ public actor Controller {
     /// per attempt, when the port is free and the guard keeping it to this
     /// Mac is in place.
     private var localDNS = false
+    /// sing-box's log level for the session: set before it begins, kept
+    /// through its reconnects (one log file, one level).
+    private var logLevel: String?
+
+    public func setLogLevel(_ level: String) { logLevel = level }
 
     // MARK: - Status
 
@@ -370,9 +382,24 @@ public actor Controller {
         }
         guard epoch == my else { return false }
         latency = measured
+        // A server that was answering stays in use until it has failed
+        // `failAfterChecks` checks in a row; one that was not needs one
+        // answer. (Right after a start nothing was answering yet: the first
+        // check decides at once.)
+        var stillAlive: Set<UUID> = []
+        for id in ids {
+            if (measured[id] ?? nil) != nil {
+                strikes[id] = 0
+                stillAlive.insert(id)
+            } else {
+                strikes[id, default: 0] += 1
+                if alive.contains(id), strikes[id, default: 0] < options.failAfterChecks { stillAlive.insert(id) }
+            }
+        }
+        alive = stillAlive
         for r in routes {
             let chain = profile.chain(of: r)
-            let up = chain.first { (measured[$0] ?? nil) != nil }
+            let up = chain.first { alive.contains($0) }
             let next: RouteState.Via = up.map { .server($0) } ?? (r.killSwitch ? .blocked : .direct)
             guard via[r.id] != next else { continue }
             let member: String = switch next {
@@ -486,6 +513,7 @@ public actor Controller {
         var env = options.configEnvironment
         env.clashAPISecret = (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined()
         env.localDNS = localDNS
+        if let logLevel { env.logLevel = logLevel }
         env.captive = options.captivePort.map {
             .init(port: $0, username: "silentroute",
                   password: (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined())
@@ -615,6 +643,8 @@ public actor Controller {
         // "Everything else" must reach one of its servers; any other route
         // using servers must reach at least one too, or there is no VPN.
         via = [:]
+        alive = []
+        strikes = [:]
         await checkServers(epoch: my)
         guard epoch == my else { return }
         if let failure = proofFailure() {
@@ -805,6 +835,8 @@ public actor Controller {
     private func teardown() async {
         via = [:]
         latency = [:]
+        alive = []
+        strikes = [:]
         await network.restoreDNS()
         await network.releaseLocalDNS()
         localDNS = false

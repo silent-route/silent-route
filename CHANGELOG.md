@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.4-beta
+## 1.4.0-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -28,8 +28,15 @@ On most networks macOS asks the router to look up names, and the router is reach
 ### A kill switch from the first moment
 
 - **With a kill switch on any active route, everything outside the tunnel is blocked the moment you turn the VPN on**, and the servers are checked behind that block. Before, traffic went out directly for the few seconds the first connection took. If the VPN cannot connect, the block is lifted and the network is as it was. A kill switch on a route that is turned off does not count; with none on any active route, nothing is ever blocked.
+- **Devices with local IPv6 addresses** (`fd…` — a NAS, a home server) are reachable when the profile allows the local network, as their IPv4 addresses always were.
 - **Ping no longer clutters the log.** A proxy server cannot carry ping, so pings meant for a route through servers were dropped with a warning for every packet. They are now refused at once — never sent past the tunnel — and routes that go direct keep their ping.
 - When the network changes, the session log says so, so the errors sing-box prints for the connections the change cut have a visible cause.
+
+### Servers that are slow, not dead
+
+- **A server counts as down only after two missed checks in a row.** One lost check — a dropped packet, a busy moment — used to block its routes (or move them to the next server) for about ten seconds, again and again, while the server was fine.
+- **Slow servers get time.** Connecting to a server may take up to 15 seconds (it was 5), and a health check waits up to 10 seconds for an answer. A busy proxy that is slow to accept connections stays slow, as it is in other clients, instead of failing and getting its route blocked.
+- **SOCKS5 proxies carry TCP only by default**, as in most clients. With UDP, every HTTP/3 connection (Google and many sites use it) held a connection of its own to the proxy, and proxies that limit connections ran out of them. Browsers now use TCP through such a proxy. **UDP through this proxy**, in the server's settings, turns it back on for calls or games, if the proxy supports it.
 
 ### Hotel and café Wi-Fi, without turning the VPN off
 
@@ -76,9 +83,11 @@ The whole interface was reworked to follow Apple's Human Interface Guidelines fo
 - **Everything is in the menu bar too:** File › New Profile (⌘N), Import Profile… (⌘O), Export Profile… (⇧⌘E); View › Monitor, Logs, Active Profile (⌘1, ⌘2, ⌘3); VPN › Turn VPN On / Off (⇧⌘T) and Emergency Restore…; Window › Silent Route (⌘0); Help › Silent Route Help.
 - **Settings as toolbar panes** (General, Notifications, Updates, Advanced), the window titled after the open pane, and the last pane you viewed comes back.
 - **Edit… is in each route's ⋯ menu**, *Everything else* included, next to Duplicate and Delete. A double-click on a route opens it too.
+- **Settings › Advanced › Log every connection** records each connection in the session log — which app, which site, through which route and server — to track a problem down. It takes effect from the next session; off by default.
 - **Logs: right-click a session** to export it (with or without addresses), show it in Finder, or move it to the Trash.
 - **The profiles and the logs are plain lists with the system's own selection,** as in Finder, Mail and Notes. The session still running is marked with a green dot on the right, as the active profile is.
 - **Monitor is laid out like Activity Monitor's Network tab:** the list of apps or connections takes the window, edge to edge; below it, the figures (download, upload, connections, data received and sent) and a chart in a thin frame — larger than Activity Monitor's.
+- **Monitor's colours:** download purple, upload teal.
 - **The chart covers the whole session**, from the moment the VPN was turned on and across reconnects, also while Monitor was closed — open it any time to see what happened before. Show the last 2 minutes, an hour, or the whole session, with times along the bottom. A reconnect shows as a drop to zero. The list of connections is read only while Monitor is on screen.
 - **The Settings button in the toolbar is dimmed while Settings is open** and back to normal as soon as it is closed.
 - **The toolbar's title says what kind of page is open:** Monitor, Logs or Profile (a profile's name is already shown large on the page). Before, switching from Monitor or Logs to a profile left the previous title behind.
@@ -123,7 +132,7 @@ If your copy shows an update it cannot install, quit Silent Route and open it ag
 
 ### Updating
 
-Install the update from the app (Settings › Updates) or from the disk image below. Coming from 1.2.3 or earlier, the update still runs the old way once: after the relaunch, click **Update Helper** if asked. From 1.2.4 on, the helper is updated before the relaunch, with the VPN kept protected. Profiles and logs are kept.
+Install the update from the app (Settings › Updates) or from the disk image below. Coming from 1.2.3 or earlier (1.0.1 included), the update still runs the old way once: after the relaunch, click **Update Helper** if asked. From 1.2.4 on, the helper is updated before the relaunch, with the VPN kept protected. Profiles and logs are kept.
 
 ## 1.0.1-beta
 

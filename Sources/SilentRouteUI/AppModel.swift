@@ -58,6 +58,8 @@ public final class AppModel {
     /// The VPN is on, turned on by another user of this Mac: we see only
     /// that, may turn it off, and change nothing of what it runs.
     public private(set) var otherUsersVPN = false
+    /// This user's sessions log every connection (kept by the helper).
+    public private(set) var detailedLogs = false
     public private(set) var library = ProfileLibrary()
     public private(set) var speed: Speed?
     /// Bytes since the uptime's start (`uptimeSince`). sing-box counts from
@@ -175,6 +177,7 @@ public final class AppModel {
         }
         if let v = r.helperVersion { helperVersion = v }
         otherUsersVPN = r.otherUsersVPN ?? false
+        if let d = r.detailedLogs { detailedLogs = d }
         activeProfile = r.activeProfile
         if let lib = r.library {
             library = lib
@@ -287,6 +290,12 @@ public final class AppModel {
         else if first.contains("Disconnecting") { phase = .stopping }
         else { phase = .off }
         return (phase, text.contains("kill switch: on"))
+    }
+
+    /// From the next session on (the next log file).
+    public func setDetailedLogs(_ on: Bool) async {
+        detailedLogs = on
+        await run(.setDetailedLogs(on))
     }
 
     public func activate(_ id: Profile.ID) async {

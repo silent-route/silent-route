@@ -57,6 +57,8 @@ struct ServerDraft: Equatable {
 
     var proxyType: ProxyType = .socks5
     var username = ""
+    /// SOCKS5: UDP through the proxy (see Proxy.udp).
+    var proxyUDP = false
 
     var muxOn = false
     var muxKind: Multiplex.Kind = .h2mux
@@ -136,6 +138,7 @@ struct ServerDraft: Equatable {
             proxyType = p.kind == .socks5 ? .socks5 : (p.tls != nil ? .https : .http)
             username = p.username ?? ""
             password = p.password ?? ""
+            proxyUDP = p.udp
             sni = p.tls?.serverName ?? ""
             insecure = p.tls?.insecure ?? false
         }
@@ -205,7 +208,8 @@ struct ServerDraft: Equatable {
         case .proxy:
             let user = clean(username), pass = clean(password)
             protocolValue = .proxy(Proxy(kind: proxyType == .socks5 ? .socks5 : .http, username: user, password: pass,
-                                         tls: proxyType == .https ? TLS(serverName: clean(sni) ?? (IPNetwork(h) == nil ? h : nil), insecure: insecure) : nil))
+                                         tls: proxyType == .https ? TLS(serverName: clean(sni) ?? (IPNetwork(h) == nil ? h : nil), insecure: insecure) : nil,
+                                         udp: proxyType == .socks5 && proxyUDP))
         case .tunnel:
             switch proto {
             case .hysteria2:
