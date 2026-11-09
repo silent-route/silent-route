@@ -8,10 +8,21 @@ import VPNCore
 struct MonitorView: View {
     let model: AppModel
     let monitor: TrafficMonitor
-    @State private var view: Mode = .apps
+    @State private var view: Mode
     @State private var search = ""
-    @State private var range: ChartRange = .session
-    @State private var connOrder = [KeyPathComparator(\TrafficMonitor.Connection.downRate, order: .reverse)]
+    @AppStorage("monitorChartRange") private var range: ChartRange = .session
+    @State private var appOrder = [KeyPathComparator(\AppRow.downRate, order: .reverse)]
+    @State private var connOrder = [KeyPathComparator(\ConnectionRow.downRate, order: .reverse)]
+    @State private var appSelection = Set<AppRow.ID>()
+    @State private var connSelection = Set<ConnectionRow.ID>()
+    @State private var pins = MonitorPins.load()
+    @State private var adding: RouteSubject?
+
+    init(model: AppModel, monitor: TrafficMonitor, mode: Mode = .apps) {
+        self.model = model
+        self.monitor = monitor
+        _view = State(initialValue: mode)
+    }
 
     /// Download purple, upload teal-blue: system colours, so they suit the
     /// light and the dark appearance alike.
@@ -71,6 +82,7 @@ struct MonitorView: View {
             Divider()
             summary
         }
+        .sheet(item: $adding) { AddToRouteSheet(model: model, subject: $0) }
         // The view switch and the search field in the toolbar, as there.
         .searchable(text: $search, placement: .toolbar, prompt: "Filter")
         .toolbar {
@@ -98,23 +110,28 @@ struct MonitorView: View {
                 Divider().gridCellUnsizedAxes(.horizontal)
                 figure("Data received:", Format.bytes(monitor.downloadTotal))
                 figure("Data sent:", Format.bytes(monitor.uploadTotal))
+                Divider().gridCellUnsizedAxes(.horizontal)
+                // The chart's span: a small pop-up with the figures, so
+                // nothing comes between the list and the chart.
+                GridRow {
+                    Text("Chart:").foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                    Picker("Chart", selection: $range) {
+                        ForEach(ChartRange.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                    .gridColumnAlignment(.trailing)
+                    .help("How much of this VPN session the chart shows — it is recorded from the moment the VPN was turned on")
+                }
             }
             .font(.callout)
             .fixedSize()
-            VStack(alignment: .trailing, spacing: 6) {
-                Picker("Show", selection: $range) {
-                    ForEach(ChartRange.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .controlSize(.small)
-                .help("How much of this VPN session the chart shows — it is recorded from the moment the VPN was turned on")
-                chart
-                    .frame(height: 170)
-                    .padding(10)
-                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
-            }
+            chart
+                .frame(height: 170)
+                .padding(10)
+                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
         }
         .padding(16)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -174,41 +191,67 @@ struct MonitorView: View {
         return q.isEmpty || text.contains { $0.lowercased().contains(q) }
     }
 
+    // MARK: Lists
+
+    private var appRows: [AppRow] {
+        let rows = AppRow.rows(monitor.apps, pins: pins.apps).filter { matches($0.name, $0.via) }
+        return MonitorOrder.arranged(rows, pin: \.pin, by: appOrder,
+                                     tieBreak: [KeyPathComparator(\.download, order: .reverse), KeyPathComparator(\.name), KeyPathComparator(\.id)])
+    }
+
+    private var connectionRows: [ConnectionRow] {
+        let rows = ConnectionRow.rows(monitor.connections, pins: pins.destinations)
+            .filter { matches($0.appName, $0.destination, $0.exit, $0.route) }
+        return MonitorOrder.arranged(rows, pin: \.pin, by: connOrder,
+                                     tieBreak: [KeyPathComparator(\.start, order: .reverse), KeyPathComparator(\.id)])
+    }
+
+    /// Every column sorts, as in Activity Monitor: a click on its header,
+    /// again to reverse. Pinned rows stay on top in their own order.
     private var appsTable: some View {
-        let rows = monitor.apps.filter { matches($0.app.name, $0.exits.joined(separator: " ")) }
-        return Table(rows) {
-            TableColumn("App") { a in
+        Table(appRows, selection: $appSelection, sortOrder: $appOrder) {
+            TableColumn("App", value: \.name) { a in
                 HStack(spacing: 6) {
                     ProcessIcon(app: a.app)
-                    Text(a.app.name).lineLimit(1)
+                    Text(a.name).lineLimit(1)
+                    if a.pin != nil { PinMark() }
                 }
-                .help(a.app.executable)
+                .help(a.app.path)
+                .dimmed(!a.isLive)
             }
             .width(min: 140, ideal: 200)
-            TableColumn("Via") { a in Text(a.exits.joined(separator: ", ")).foregroundStyle(.secondary).lineLimit(1) }
-            TableColumn("Conn.") { a in Text("\(a.connections)").monospacedDigit() }.width(50)
-            TableColumn("↓ Speed") { a in Text(Format.speed(a.downRate)).monospacedDigit() }.width(90)
-            TableColumn("↑ Speed") { a in Text(Format.speed(a.upRate)).monospacedDigit() }.width(90)
-            TableColumn("Received") { a in Text(Format.bytes(a.download)).monospacedDigit().foregroundStyle(.secondary) }.width(80)
-            TableColumn("Sent") { a in Text(Format.bytes(a.upload)).monospacedDigit().foregroundStyle(.secondary) }.width(80)
+            TableColumn("Via", value: \.via) { a in Text(a.via).foregroundStyle(.secondary).lineLimit(1).dimmed(!a.isLive) }
+            TableColumn("Conn.", value: \.connections) { a in live(a.isLive, "\(a.connections)") }.width(50)
+            TableColumn("↓ Speed", value: \.downRate) { a in live(a.isLive, Format.speed(a.downRate)) }.width(90)
+            TableColumn("↑ Speed", value: \.upRate) { a in live(a.isLive, Format.speed(a.upRate)) }.width(90)
+            TableColumn("Received", value: \.download) { a in live(a.isLive, Format.bytes(a.download), secondary: true) }.width(80)
+            TableColumn("Sent", value: \.upload) { a in live(a.isLive, Format.bytes(a.upload), secondary: true) }.width(80)
+        }
+        .contextMenu(forSelectionType: AppRow.ID.self) { ids in
+            appMenu(appRows.filter { ids.contains($0.id) })
+        } primaryAction: { ids in
+            if ids.count == 1, let r = appRows.first(where: { ids.contains($0.id) }), canAdd(r.app) {
+                adding = RouteSubject(app: r.app)
+            }
         }
     }
 
     private var connectionsTable: some View {
-        let rows = monitor.connections
-            .filter { matches($0.app.name, $0.host, $0.exit, $0.route) }
-            .sorted(using: connOrder)
-        return Table(rows, sortOrder: $connOrder) {
-            TableColumn("App", value: \.app.name) { c in
+        Table(connectionRows, selection: $connSelection, sortOrder: $connOrder) {
+            TableColumn("App", value: \.appName) { c in
                 HStack(spacing: 6) {
                     ProcessIcon(app: c.app)
-                    Text(c.app.name).lineLimit(1)
+                    Text(c.appName).lineLimit(1)
+                    if c.pin != nil { PinMark() }
                 }
+                .help(c.app.path)
+                .dimmed(!c.isLive)
             }
             .width(min: 110, ideal: 150)
-            TableColumn("Destination", value: \.host) { c in
-                Text("\(c.host):\(c.port)").lineLimit(1).textSelection(.enabled)
-                    .help("\(c.network) \(c.host):\(c.port)")
+            TableColumn("Destination", value: \.destination) { c in
+                Text(c.destination).lineLimit(1)
+                    .help(c.live.map { "\($0.network) \(c.destination)" } ?? "\(c.host) — no connection now")
+                    .dimmed(!c.isLive)
             }
             .width(min: 150, ideal: 230)
             TableColumn("Route", value: \.route) { c in Text(c.route).lineLimit(1).help(c.route) }
@@ -217,41 +260,132 @@ struct MonitorView: View {
                 HStack(spacing: 4) {
                     Text(c.exit).lineLimit(1)
                         .foregroundStyle(c.exit == "Direct" ? Color.secondary : Color.primary)
-                    if c.viaFallback {
+                    if c.live?.viaFallback == true {
                         Image(systemName: "arrow.triangle.branch").foregroundStyle(.orange).help("Not the route's first server — it is down")
                     }
                 }
             }
             .width(min: 90, ideal: 120)
-            TableColumn("↓ Speed", value: \.downRate) { c in Text(Format.speed(c.downRate)).monospacedDigit() }.width(85)
-            TableColumn("↑ Speed", value: \.upRate) { c in Text(Format.speed(c.upRate)).monospacedDigit() }.width(85)
+            TableColumn("↓ Speed", value: \.downRate) { c in live(c.isLive, Format.speed(c.downRate)) }.width(85)
+            TableColumn("↑ Speed", value: \.upRate) { c in live(c.isLive, Format.speed(c.upRate)) }.width(85)
             TableColumn("Time", value: \.start) { c in
-                Text(Format.uptime(since: c.start, now: Date())).monospacedDigit().foregroundStyle(.secondary)
+                live(c.isLive, c.isLive ? Format.uptime(since: c.start, now: Date()) : "", secondary: true)
             }
             .width(60)
         }
-        .contextMenu(forSelectionType: String.self) { ids in
-            if ids.count == 1, let id = ids.first, let c = monitor.connections.first(where: { $0.id == id }) {
-                Button("Copy Address") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(c.host, forType: .string)
-                }
-            }
-            Button(ids.count > 1 ? "Close \(ids.count) Connections" : "Close Connection", role: .destructive) {
-                for id in ids { monitor.close(id) }
+        .contextMenu(forSelectionType: ConnectionRow.ID.self) { ids in
+            connectionMenu(connectionRows.filter { ids.contains($0.id) })
+        } primaryAction: { ids in
+            if ids.count == 1, let r = connectionRows.first(where: { ids.contains($0.id) }) {
+                adding = RouteSubject(app: r.app, host: r.host)
             }
         }
     }
+
+    /// A figure; a dash for a pinned row with nothing live.
+    private func live(_ isLive: Bool, _ text: String, secondary: Bool = false) -> some View {
+        Text(isLive ? text : "—")
+            .monospacedDigit()
+            .foregroundStyle(secondary || !isLive ? .secondary : .primary)
+            .dimmed(!isLive)
+    }
+
+    private func canAdd(_ app: TrafficMonitor.AppRef) -> Bool { RouteAddition.matcher(for: app) != nil }
+
+    // MARK: Menus
+
+    @ViewBuilder
+    private func appMenu(_ rows: [AppRow]) -> some View {
+        if rows.count == 1, let r = rows.first {
+            Button("Add to Route…") { adding = RouteSubject(app: r.app) }.disabled(!canAdd(r.app))
+            Divider()
+        }
+        pinItems(rows.map { ($0.id, $0.pin) }, count: pins.apps.items.count,
+                 pin: { for r in rows { pins.apps.pin(r.app) } },
+                 unpin: { for r in rows { pins.apps.unpin(r.id) } },
+                 move: { id, by in pins.apps.move(id, by: by) })
+        if rows.count == 1, let path = rows.first?.app.path, !path.isEmpty {
+            Divider()
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+        }
+    }
+
+    @ViewBuilder
+    private func connectionMenu(_ rows: [ConnectionRow]) -> some View {
+        if rows.count == 1, let r = rows.first {
+            Button("Add to Route…") { adding = RouteSubject(app: r.app, host: r.host) }
+            Divider()
+        }
+        // One pin per app and site, however many connections are selected.
+        let pinIDs = Array(Set(rows.map(\.pinID)))
+        pinItems(pinIDs.map { id in (id, pins.destinations.index(of: id)) }, count: pins.destinations.items.count,
+                 pin: { for r in rows { pins.destinations.pin(.init(app: r.app, host: r.host)) } },
+                 unpin: { for id in pinIDs { pins.destinations.unpin(id) } },
+                 move: { id, by in pins.destinations.move(id, by: by) })
+        if rows.count == 1, let r = rows.first {
+            Divider()
+            Button("Copy Address") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(r.host, forType: .string)
+            }
+        }
+        let open = rows.filter(\.isLive)
+        if !open.isEmpty {
+            Divider()
+            Button(open.count > 1 ? "Close \(open.count) Connections" : "Close Connection", role: .destructive) {
+                for r in open { monitor.close(r.id) }
+            }
+        }
+    }
+
+    /// Pin to Top, or Unpin when all of them are pinned; Move Up and Move
+    /// Down among the pinned for a single pinned one.
+    @ViewBuilder
+    private func pinItems(_ items: [(id: String, pin: Int?)], count: Int, pin: @escaping () -> Void,
+                          unpin: @escaping () -> Void, move: @escaping (String, Int) -> Void) -> some View {
+        if !items.isEmpty && items.allSatisfy({ $0.pin != nil }) {
+            Button("Unpin") { changePins(unpin) }
+            if items.count == 1, let only = items.first, let i = only.pin {
+                Button("Move Up") { changePins { move(only.id, -1) } }.disabled(i == 0)
+                Button("Move Down") { changePins { move(only.id, 1) } }.disabled(i >= count - 1)
+            }
+        } else if !items.isEmpty {
+            Button("Pin to Top") { changePins(pin) }
+        }
+    }
+
+    private func changePins(_ change: () -> Void) {
+        change()
+        pins.save()
+    }
+}
+
+/// Marks a pinned row.
+private struct PinMark: View {
+    var body: some View {
+        Image(systemName: "pin.fill")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .rotationEffect(.degrees(45))
+            .help("Pinned to the top")
+    }
+}
+
+private extension View {
+    /// A pinned row with nothing live: there, but faded.
+    func dimmed(_ on: Bool) -> some View { opacity(on ? 0.45 : 1) }
 }
 
 struct ProcessIcon: View {
     let app: TrafficMonitor.AppRef
+    var size: CGFloat = 16
     var body: some View {
         if let b = app.bundlePath {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: b)).resizable().frame(width: 16, height: 16)
+            Image(nsImage: NSWorkspace.shared.icon(forFile: b)).resizable().frame(width: size, height: size)
         } else {
             Image(systemName: app.executable.isEmpty ? "gearshape" : "terminal")
-                .frame(width: 16, height: 16).foregroundStyle(.secondary)
+                .font(.system(size: size * 0.8))
+                .frame(width: size, height: size).foregroundStyle(.secondary)
         }
     }
 }

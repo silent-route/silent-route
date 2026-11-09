@@ -28,15 +28,22 @@ final class TrafficMonitor {
         var upRate: Int64 = 0
     }
 
-    struct AppRef: Hashable {
+    struct AppRef: Hashable, Codable, Identifiable {
         var name: String
         /// The .app bundle, for the icon; nil for command-line tools.
         var bundlePath: String?
         var executable: String
+
+        /// One app, whichever of its processes: the bundle (a browser's
+        /// helpers are part of it), or the program itself; "" for traffic
+        /// sing-box could not attribute.
+        var id: String { bundlePath ?? executable }
+        /// Where it is on disk, for a tooltip.
+        var path: String { bundlePath ?? executable }
     }
 
     struct AppTraffic: Identifiable, Equatable {
-        var id: String { app.executable }
+        var id: String { app.id }
         var app: AppRef
         var connections: Int
         var downRate: Int64
@@ -52,13 +59,12 @@ final class TrafficMonitor {
     private(set) var problem: String?
 
     var apps: [AppTraffic] {
-        Dictionary(grouping: connections, by: \.app).map { app, cs in
-            AppTraffic(app: app, connections: cs.count,
+        Dictionary(grouping: connections, by: \.app.id).map { _, cs in
+            AppTraffic(app: cs[0].app, connections: cs.count,
                        downRate: cs.reduce(0) { $0 + $1.downRate }, upRate: cs.reduce(0) { $0 + $1.upRate },
                        download: cs.reduce(0) { $0 + $1.download }, upload: cs.reduce(0) { $0 + $1.upload },
                        exits: Array(Set(cs.map(\.exit))).sorted())
         }
-        .sorted { ($0.downRate + $0.upRate, $0.download) > ($1.downRate + $1.upRate, $1.download) }
     }
 
     private var task: Task<Void, Never>?

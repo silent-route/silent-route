@@ -193,6 +193,19 @@ MainActor.assumeIsolated {
     renderWindow("full-monitor-then-profile", size: win, then: { WindowCommand.showActiveProfile.post() },
                  MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
     renderWindow("full-settings", size: CGSize(width: 600, height: 480), SettingsView(model: model(.ready, connected)))
+    // Pinned: an app with traffic, and a site nothing goes to now.
+    var pins = MonitorPins()
+    pins.apps.pin(TrafficMonitor.app("/usr/bin/curl"))
+    pins.destinations.pin(.init(app: TrafficMonitor.app("/Applications/Telegram.app/Contents/MacOS/Telegram"), host: "web.telegram.org"))
+    pins.save()
+    defer { UserDefaults.standard.removeObject(forKey: MonitorPins.defaultsKey) }
+    renderWindow("full-monitor-pinned", size: win, MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
+    render("monitor-connections-pinned", size: CGSize(width: 820, height: 560),
+           MonitorView(model: model(.ready, connected, speed: speed), monitor: sampleMonitor(), mode: .connections))
+    render("add-to-route-site", AddToRouteSheet(model: model(.ready, connected),
+        subject: RouteSubject(app: TrafficMonitor.app("/Applications/Safari.app/Contents/MacOS/Safari"), host: "rr3.googlevideo.com")))
+    render("add-to-route-app", AddToRouteSheet(model: model(.ready, connected),
+        subject: RouteSubject(app: TrafficMonitor.app("/Applications/Telegram.app/Contents/MacOS/Telegram"))))
     render("window-monitor", size: win, MainWindow(model: model(.ready, connected, speed: speed), monitor: sampleMonitor()))
     for section in [ProfileEditor.Section.servers, .dns, .network] {
         render("editor-\(section)", size: CGSize(width: 760, height: 640),

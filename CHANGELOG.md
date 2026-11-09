@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.0-beta
+## 1.4.2-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -88,10 +88,15 @@ The whole interface was reworked to follow Apple's Human Interface Guidelines fo
 - **The profiles and the logs are plain lists with the system's own selection,** as in Finder, Mail and Notes. The session still running is marked with a green dot on the right, as the active profile is.
 - **Monitor is laid out like Activity Monitor's Network tab:** the list of apps or connections takes the window, edge to edge; below it, the figures (download, upload, connections, data received and sent) and a chart in a thin frame — larger than Activity Monitor's.
 - **Monitor's colours:** download purple, upload teal.
-- **The chart covers the whole session**, from the moment the VPN was turned on and across reconnects, also while Monitor was closed — open it any time to see what happened before. Show the last 2 minutes, an hour, or the whole session, with times along the bottom. A reconnect shows as a drop to zero. The list of connections is read only while Monitor is on screen.
+- **The chart covers the whole session**, from the moment the VPN was turned on and across reconnects, also while Monitor was closed — open it any time to see what happened before. Show the last 2 minutes, an hour, or the whole session from a small pop-up beside the figures, with times along the bottom. A reconnect shows as a drop to zero. The list of connections is read only while Monitor is on screen.
+- **Monitor's lists sort by any column,** as in Activity Monitor: click a header, click again to reverse.
+- **Pin to Top** (right-click a row) keeps an app, or an app's traffic to a site, at the top of Monitor's list, in your own order (Move Up / Move Down). A pinned row with nothing live is shown faded. Pins are kept across launches.
+- **Add to Route…** (right-click, or double-click a row in Monitor) puts an app — or, for a connection, its site, at the level you choose: googlevideo.com with its subdomains, or one exact name — into a route: an existing one, or a new one placed first, through the server you pick, direct or blocked; in any profile or a new one. It is saved at once, and for the profile in use it applies right away. If adding would narrow a route rather than widen it (the first app in a route of sites), the sheet says so first.
+- **Apps are counted whole in Monitor:** a browser's helper processes are part of the browser's row, not rows of their own.
 - **The Settings button in the toolbar is dimmed while Settings is open** and back to normal as soon as it is closed.
 - **The toolbar's title says what kind of page is open:** Monitor, Logs or Profile (a profile's name is already shown large on the page). Before, switching from Monitor or Logs to a profile left the previous title behind.
 - The main window opens a little wider by default.
+- **No dark corners on the menu bar panel** on macOS 26 with *Standard* transparency.
 - **The menu bar panel closes when you switch to another app or another desktop.** It used to stay on screen and could look as if it had opened by itself.
 - Buttons that open another window end in an ellipsis (Add Route…, Install Helper…), and titles use Title Case, as in Apple's apps.
 

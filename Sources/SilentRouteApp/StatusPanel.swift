@@ -17,6 +17,8 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     }
 
     private let host: NSHostingView<AnyView>
+    /// The Liquid Glass behind the content (macOS 26), for Transparency.
+    private var glass: NSView?
     private weak var button: NSStatusBarButton?
     private var monitors: [Any] = []
     private var appSwitch: NSObjectProtocol?
@@ -39,7 +41,9 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
         becomesKeyOnlyIfNeeded = false
         animationBehavior = .utilityWindow
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-        contentView = Self.background(around: host)
+        let (background, glass) = Self.background(around: host)
+        contentView = background
+        self.glass = glass
         delegate = self
     }
 
@@ -58,6 +62,7 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
         applyTransparency()
         place()
         makeKeyAndOrderFront(nil)
+        refreshShadow()
         button.highlight(true)
         watchOutsideClicks()
     }
@@ -95,7 +100,14 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     /// Content grew or shrank (a notice, the restore confirmation): keep
     /// the top edge under the menu bar.
     func windowDidResize(_ notification: Notification) {
-        if isVisible { place() }
+        if isVisible { place(); refreshShadow() }
+    }
+
+    /// The window's shadow follows the shape of what is drawn: worked out
+    /// before the glass has rendered, it is a rectangle, and its dark
+    /// corners show outside the rounded panel. Once drawn, it is redone.
+    private func refreshShadow() {
+        DispatchQueue.main.async { [weak self] in self?.invalidateShadow() }
     }
 
     func refit() {
@@ -153,18 +165,35 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
     /// for "More" — the panel floats over the desktop, which is where Apple
     /// allows it.
     private func applyTransparency() {
-        if #available(macOS 26, *), let glass = contentView as? NSGlassEffectView {
+        if #available(macOS 26, *), let glass = glass as? NSGlassEffectView {
             glass.style = Preferences.transparency == .more ? .clear : .regular
         }
+        refreshShadow()
     }
 
-    /// Liquid Glass on macOS 26; the menu material with rounded corners on 14–15.
-    private static func background(around content: NSView) -> NSView {
+    /// Liquid Glass on macOS 26; the menu material with rounded corners on
+    /// 14–15. The glass sits in a container clipped to the same rounded
+    /// shape, so nothing it draws reaches past the corners.
+    private static func background(around content: NSView) -> (NSView, glass: NSView?) {
         if #available(macOS 26, *) {
             let glass = NSGlassEffectView()
             glass.cornerRadius = cornerRadius
             glass.contentView = content
-            return glass
+            let clip = NSView()
+            clip.wantsLayer = true
+            clip.layer?.backgroundColor = NSColor.clear.cgColor
+            clip.layer?.cornerRadius = cornerRadius
+            clip.layer?.cornerCurve = .continuous
+            clip.layer?.masksToBounds = true
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            clip.addSubview(glass)
+            NSLayoutConstraint.activate([
+                glass.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+                glass.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
+                glass.topAnchor.constraint(equalTo: clip.topAnchor),
+                glass.bottomAnchor.constraint(equalTo: clip.bottomAnchor),
+            ])
+            return (clip, glass)
         }
         let fx = NSVisualEffectView()
         fx.material = .popover
@@ -179,7 +208,7 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
             content.topAnchor.constraint(equalTo: fx.topAnchor),
             content.bottomAnchor.constraint(equalTo: fx.bottomAnchor),
         ])
-        return fx
+        return (fx, nil)
     }
 
     private static func roundedMask(_ r: CGFloat) -> NSImage {
