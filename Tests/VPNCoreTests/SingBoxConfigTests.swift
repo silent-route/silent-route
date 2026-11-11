@@ -250,13 +250,45 @@ enum Fixtures {
     @Test func aBlankProfileHasNothingBuiltIn() throws {
         var p = Profile.blank(name: "New")
         #expect(p.routes.isEmpty)
-        #expect(p.defaultRoute.target == .servers([]))
+        #expect(p.defaultRoute.target == .direct)
         p.tunnels = [Fixtures.h2]
         p.defaultRoute.target = .servers([Fixtures.h2ID])
         let text = try SingBoxConfig.generate(p, env: Fixtures.env).text
         for word in ["geoip", "geosite", "223.5.5.5", "\"cn\"", "xn--fiqs8s", "rule_set"] {
             #expect(!text.contains(word), "a blank profile's config contains \(word)")
         }
+    }
+
+    /// The common setup: one app through a server, everything else
+    /// untouched. A new profile starts with "Everything else" direct and
+    /// can be turned on as it is; "Everything else" can still go through
+    /// servers or be blocked, like any route.
+    @Test func oneRouteThroughAServerTheRestDirect() throws {
+        var p = Profile.blank(name: "New")
+        #expect(Validation.check(p).filter { $0.severity == .error }.isEmpty)
+        p.tunnels = [Fixtures.h2]
+        // Servers no route uses: allowed, said once, on "Everything else".
+        let idle = Validation.check(p)
+        #expect(idle.filter { $0.severity == .error }.isEmpty)
+        let defaultID = p.defaultRoute.id
+        #expect(idle.contains(where: { $0.severity == .warning && $0.route == defaultID }))
+        p.routes = [Route(name: "Telegram", conditions: Conditions(apps: [.bundle(path: "/Applications/Telegram.app")]),
+                          target: .servers([Fixtures.h2ID]))]
+        #expect(Validation.check(p).isEmpty)
+        #expect(p.protectionMode == .whileConnected, "the route's kill switch still holds")
+        _ = try SingBoxConfig.generate(p, env: Fixtures.env)
+        // And the other way round: everything else through the server.
+        p.defaultRoute.target = .servers([Fixtures.h2ID])
+        #expect(Validation.check(p).isEmpty)
+    }
+
+    /// "Everything else" through servers with none chosen still cannot be
+    /// turned on, and the message says what to do.
+    @Test func everythingElseWithNoServersSaysHowToFixIt() {
+        var p = Profile.blank(name: "New")
+        p.defaultRoute.target = .servers([])
+        let e = Validation.check(p).filter { $0.severity == .error }
+        #expect(e.count == 1 && e[0].message.contains("send it Direct"))
     }
 
     @Test func protectionFollowsTheRoutes() {

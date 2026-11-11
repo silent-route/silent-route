@@ -79,6 +79,12 @@ public enum Validation {
             issues += tunnelIssues(t)
         }
 
+        // Servers, but nothing sent through them: allowed (a profile being
+        // set up), worth saying — turned on, it would carry no traffic.
+        if !profile.tunnels.isEmpty, profile.serverRoutes.isEmpty {
+            warn("no route sends traffic through a server yet — everything goes direct", rule: profile.defaultRoute.id)
+        }
+
         var routeIDs: Set<UUID> = []
         for r in profile.allRoutes {
             let isDefault = r.id == profile.defaultRoute.id
@@ -93,7 +99,8 @@ public enum Validation {
             if case .servers(let list) = r.target {
                 let existing = profile.chain(of: r)
                 if existing.isEmpty {
-                    error("\(label) has no servers to send traffic to", rule: r.id)
+                    error(isDefault ? "\(label) has no servers to send traffic to — add one to it, or send it Direct"
+                                    : "\(label) has no servers to send traffic to", rule: r.id)
                 } else if existing.count < list.count {
                     warn("\(label): a server in its list no longer exists and is skipped", rule: r.id)
                 }

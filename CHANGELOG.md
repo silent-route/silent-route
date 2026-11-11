@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.2-beta
+## 1.4.3-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -68,6 +68,7 @@ All three are off by default and live where they apply. Leave them alone unless 
 
 ### Improved
 
+- **A new profile can be turned on as it is.** *Everything else* now starts direct instead of "through servers" with none chosen, which could not be turned on: "only this app through the tunnel, the rest untouched" works without touching it. It can still be sent through any servers, or blocked, in its Edit…. A profile with servers that no route uses says so (everything would go direct); one whose *Everything else* has no servers says how to fix it.
 - **Fewer dropped connections on network changes.** A Wi-Fi switch or waking from sleep no longer restarts sing-box at once: the helper checks the servers every 2 seconds and restarts only after 12 seconds without any answer. Short drops pass without breaking calls, downloads or open pages. Routes with a kill switch stay blocked meanwhile, as before.
 - Routes can be reordered with the up/down arrows on each route, like the servers inside a route.
 

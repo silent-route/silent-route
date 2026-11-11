@@ -142,10 +142,13 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
         ], dns: .exampleSplit)
     }
 
-    /// A new profile: no routes, nothing built in. "Everything else" waits
-    /// for the servers the user chooses.
+    /// A new profile: no routes, nothing built in, and "Everything else"
+    /// direct — it changes nothing until the user sends something through a
+    /// server: a route of its own, or "Everything else" itself. (Through
+    /// servers with none chosen yet, it could not be turned on at all, which
+    /// left "only this app through the tunnel" stuck.)
     public static func blank(name: String) -> Profile {
-        Profile(name: name, defaultRoute: Route(name: "Everything else", target: .servers([])))
+        Profile(name: name, defaultRoute: Route(name: "Everything else", target: .direct))
     }
 
     /// The example's segment: addresses, site lists and domain zones.
