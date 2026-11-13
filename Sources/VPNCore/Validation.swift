@@ -124,6 +124,9 @@ public enum Validation {
                     }
                 }
             }
+            if r.conditions.apps.contains(where: \.isSafari), !r.conditions.apps.contains(.webKitNetworking) {
+                warn("\(label): Safari's web pages load through Apple's shared web content process — turn on “Apple web content” for them (it also carries Mail, the App Store and other Apple apps)", rule: r.id)
+            }
             for a in r.conditions.apps {
                 switch a {
                 case .bundle(let p), .executable(let p):

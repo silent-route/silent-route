@@ -50,7 +50,11 @@ public enum Command {
                 return
             }
             if let input {
-                inPipe.fileHandleForWriting.write(Data(input.utf8))
+                // The throwing write: a tool that exits without reading its
+                // input (a failed start) is an error here, not an exception
+                // that ends the helper. (SIGPIPE itself is ignored by the
+                // helper: see Daemon.run.)
+                try? inPipe.fileHandleForWriting.write(contentsOf: Data(input.utf8))
                 try? inPipe.fileHandleForWriting.close()
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {

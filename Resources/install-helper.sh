@@ -244,31 +244,31 @@ EOF
     exit 1
   fi
 
-  install -d -m 0755 /usr/local/bin
-  ln -sf "$ROOT/bin/sroute" /usr/local/bin/sroute
+  # /usr/local/bin may be someone's (Homebrew): created only if missing, and
+  # the link replaced without following whatever is there now (-n).
+  [ -d /usr/local/bin ] || install -d -m 0755 /usr/local/bin
+  if [ ! -e /usr/local/bin/sroute ] || [ -L /usr/local/bin/sroute ]; then
+    ln -sfn "$ROOT/bin/sroute" /usr/local/bin/sroute
+  fi
   note "Silent Route helper $version installed"
 }
 
 # ── uninstall ───────────────────────────────────────────────────────────────
 
 # Every local user's ~/Library/Logs/Silent Route. Each is in a user's own
-# folder, so it is checked first: removed only if it really is that path
-# (no symbolic link anywhere on the way), never something it points to.
+# folder, so it is removed as that user, not as root: whatever the user has
+# put on the way (a link, swapped in at any moment), the removal cannot reach
+# anything the user could not delete themselves.
 remove_user_logs() {
-  local user home dir real
-  dscl . -list /Users NFSHomeDirectory 2>/dev/null | while read -r user home; do
+  local user uid home
+  dscl . -list /Users UniqueID 2>/dev/null | while read -r user uid; do
     case "$user" in _*|daemon|nobody) continue ;; esac
-    [ -d "$home" ] || continue
-    dir="$home/Library/Logs/Silent Route"
-    [ -e "$dir" ] || [ -L "$dir" ] || continue
-    # A link among the parents: the path leads somewhere else; leave it.
-    if [ -L "$home/Library" ] || [ -L "$home/Library/Logs" ]; then continue; fi
-    # The folder itself is a link: remove the link only.
-    if [ -L "$dir" ]; then rm -f "$dir"; continue; fi
-    real=$(cd "$dir" 2>/dev/null && pwd -P) || continue
-    [ "$real" = "$(cd "$home" && pwd -P)/Library/Logs/Silent Route" ] || continue
-    rm -rf "$real"
-    note "session logs of $user removed"
+    case "$uid" in ''|*[!0-9]*) continue ;; esac
+    [ "$uid" = 0 ] || [ "$uid" -ge 500 ] || continue
+    home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk 'NR==1 {print $2}') || continue
+    [ -n "$home" ] && [ -d "$home/Library/Logs/Silent Route" ] || continue
+    sudo -u "#$uid" /bin/rm -rf -- "$home/Library/Logs/Silent Route" 2>/dev/null \
+      && note "session logs of $user removed"
   done || true
 }
 
@@ -335,12 +335,13 @@ do_uninstall() {
   note "helper, profiles, logs and the $GROUP group removed"
 
   # 4. The app's per-user leftovers (what AppCleaner would find).
+  # As that user (see remove_user_logs).
   if [ -n "$user" ] && home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}') && [ -d "$home" ]; then
     sudo -u "$user" defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
-    rm -rf "$home/Library/Preferences/$BUNDLE_ID.plist" \
+    sudo -u "$user" /bin/rm -rf -- "$home/Library/Preferences/$BUNDLE_ID.plist" \
            "$home/Library/Caches/$BUNDLE_ID" \
            "$home/Library/HTTPStorages/$BUNDLE_ID" \
-           "$home/Library/Saved Application State/$BUNDLE_ID.savedState"
+           "$home/Library/Saved Application State/$BUNDLE_ID.savedState" 2>/dev/null || true
     note "app settings of $user removed"
   fi
 

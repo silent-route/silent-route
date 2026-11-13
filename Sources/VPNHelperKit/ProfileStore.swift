@@ -33,15 +33,22 @@ public struct LibraryStore: Sendable {
               var p = try? JSONDecoder().decode(Profile.self, from: d) else { return nil }
         if p.name == "Profile" { p.name = "Main" }
         let lib = ProfileLibrary(profiles: [p], activeID: p.id)
-        save(lib)
+        // The old file goes only once the new one is written.
+        guard (try? save(lib)) != nil else { return lib }
         try? FileManager.default.removeItem(at: legacyURL)
         return lib
     }
 
-    public func save(_ lib: ProfileLibrary) {
+    public struct SaveError: Error, CustomStringConvertible {
+        public var description: String
+    }
+
+    /// Written in full or not at all; throws when it could not be written
+    /// (a full disk), so nobody is told a change was saved when it was not.
+    public func save(_ lib: ProfileLibrary) throws(SaveError) {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let d = try? enc.encode(lib) else { return }
+        guard let d = try? enc.encode(lib) else { throw SaveError(description: "the profiles could not be encoded") }
         let fm = FileManager.default
         try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                 attributes: [.posixPermissions: 0o700])
@@ -53,8 +60,15 @@ public struct LibraryStore: Sendable {
         }
         let tmp = url.appendingPathExtension("tmp")
         try? fm.removeItem(at: tmp)
-        guard fm.createFile(atPath: tmp.path, contents: d, attributes: [.posixPermissions: 0o600]) else { return }
-        _ = try? fm.replaceItemAt(url, withItemAt: tmp)
+        guard fm.createFile(atPath: tmp.path, contents: d, attributes: [.posixPermissions: 0o600]) else {
+            throw SaveError(description: "the profiles could not be written (is the disk full?)")
+        }
+        do {
+            _ = try fm.replaceItemAt(url, withItemAt: tmp)
+        } catch {
+            try? fm.removeItem(at: tmp)
+            throw SaveError(description: "the profiles could not be saved: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -137,15 +151,17 @@ public actor ProfileManager {
     /// Changes are re-applied to the library as it is after the controller
     /// call: actor methods interleave at `await`, and a change made by a
     /// concurrent request in the meantime must not be lost.
-    private func commit(_ uid: uid_t, _ change: (inout ProfileLibrary) throws(ProfileLibrary.Failure) -> Void) {
+    /// Saved to disk first: if that fails, nothing changes and the request
+    /// says why.
+    private func commit(_ uid: uid_t, _ change: (inout ProfileLibrary) throws(ProfileLibrary.Failure) -> Void) throws(Failure) {
         var lib = library(of: uid)
         do { try change(&lib) } catch { return }
-        libraries[uid] = lib
-        revisions[uid, default: 0] += 1
         let store = Self.store(in: usersDir, for: uid)
         try? FileManager.default.createDirectory(at: store.url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
-        store.save(lib)
+        do { try store.save(lib) } catch { throw Failure(error.description) }
+        libraries[uid] = lib
+        revisions[uid, default: 0] += 1
     }
 
     // MARK: Per-user settings the helper applies
@@ -211,7 +227,7 @@ public actor ProfileManager {
         if live, lib.activeID == p.id, let saved = lib.active {
             do { try await controller.update(profile: saved) } catch { throw Failure(error.description) }
         }
-        commit(uid) { lib throws(ProfileLibrary.Failure) in try lib.upsert(p) }
+        try commit(uid) { lib throws(ProfileLibrary.Failure) in try lib.upsert(p) }
     }
 
     public func delete(_ id: Profile.ID, by uid: uid_t) async throws(Failure) {
@@ -223,7 +239,7 @@ public actor ProfileManager {
         do { try lib.remove(id) } catch { throw Failure(error.description) }
         let wasActive = library(of: uid).activeID == id
         let next = lib.activeID
-        commit(uid) { lib throws(ProfileLibrary.Failure) in
+        try commit(uid) { lib throws(ProfileLibrary.Failure) in
             try lib.remove(id)
             if wasActive { lib.activeID = next }
         }
@@ -238,7 +254,7 @@ public actor ProfileManager {
         if await drives(uid) {
             do { try await controller.update(profile: p) } catch { throw Failure(error.description) }
         }
-        commit(uid) { lib in lib.activeID = id }
+        try commit(uid) { lib in lib.activeID = id }
     }
 
     /// The library of helpers before profiles were per user: it goes to
@@ -252,7 +268,8 @@ public actor ProfileManager {
         try? fm.createDirectory(at: target.url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                 attributes: [.posixPermissions: 0o700])
         if !fm.fileExists(atPath: target.url.path) {
-            target.save(shared.load())
+            // Not written: the shared file stays, and the next start tries again.
+            guard (try? target.save(shared.load())) != nil else { return false }
         }
         for u in [shared.url, shared.url.appendingPathExtension("prev")] + (shared.legacyURL.map { [$0] } ?? []) {
             try? fm.removeItem(at: u)

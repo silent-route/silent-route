@@ -515,10 +515,12 @@ public enum LinkParser {
         guard ssMethods.contains(method) else { throw .unsupported("Shadowsocks method \"\(method)\"") }
         var plugin: String?
         var opts: String?
-        if let pl = p.take("plugin") {
-            let pieces = pl.split(separator: ";", maxSplits: 1).map(String.init)
-            let name = pieces[0] == "simple-obfs" ? "obfs-local" : pieces[0]
-            guard name == "obfs-local" || name == "v2ray-plugin" else { throw .unsupported("plugin \"\(pieces[0])\"") }
+        if let pl = p.take("plugin"), !pl.isEmpty {
+            // "name;options"; a value with no name (";…") names no plugin.
+            let pieces = pl.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            guard let given = pieces.first, !given.isEmpty else { throw .malformed("the plugin has no name") }
+            let name = given == "simple-obfs" ? "obfs-local" : given
+            guard name == "obfs-local" || name == "v2ray-plugin" else { throw .unsupported("plugin \"\(given)\"") }
             plugin = name
             opts = pieces.count > 1 ? pieces[1] : nil
         }

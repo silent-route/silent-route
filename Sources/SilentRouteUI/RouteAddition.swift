@@ -19,11 +19,16 @@ enum RouteAddition {
     }
 
     /// The whole app, helpers included, when it is an app bundle; the
-    /// program otherwise. Traffic sing-box could not attribute has none.
+    /// program otherwise — by name for a part of macOS, whose folder moves
+    /// between versions (/System/Library or a cryptex). Traffic sing-box
+    /// could not attribute has none.
     static func matcher(for app: TrafficMonitor.AppRef) -> AppMatcher? {
         if let b = app.bundlePath { return .bundle(path: b) }
-        return app.executable.isEmpty ? nil : .executable(path: app.executable)
+        guard !app.executable.isEmpty else { return nil }
+        if app.executable.hasPrefix("/System/") { return .processName((app.executable as NSString).lastPathComponent) }
+        return .executable(path: app.executable)
     }
+
 
     /// What a host can become, narrowest first: an address as itself; a
     /// name with its subdomains at each level down to the site
@@ -55,6 +60,13 @@ enum RouteAddition {
     /// with every subdomain — what a site's traffic usually spreads over.
     static func suggested(_ choices: [Destination]) -> Destination? {
         choices.last { if case .domainSuffix = $0 { true } else { false } } ?? choices.first
+    }
+
+    /// Whether Monitor offers the app itself for a route: not Apple's web
+    /// content, which is a route setting of its own, set in the route.
+    static func canAdd(_ app: TrafficMonitor.AppRef) -> Bool {
+        guard let m = matcher(for: app) else { return false }
+        return m != .webKitNetworking
     }
 
     static func contains(_ route: Route, _ item: Item) -> Bool {

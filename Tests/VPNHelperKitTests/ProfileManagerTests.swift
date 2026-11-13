@@ -20,6 +20,20 @@ import Testing
         return d
     }
 
+    /// A library that cannot be written (here: its folder is a file) is
+    /// not reported as saved, and nothing changes in memory either.
+    @Test func aSaveThatCannotBeWrittenIsAnError() async throws {
+        let h = Harness()
+        let dir = Self.tempDir()
+        let users = dir.appendingPathComponent("users")
+        try FileManager.default.createDirectory(at: users, withIntermediateDirectories: true)
+        try Data().write(to: users.appendingPathComponent(String(Self.other)))
+        let m = ProfileManager(controller: h.controller, usersDir: users, ownerFile: dir.appendingPathComponent("owner"))
+        await #expect(throws: ProfileManager.Failure.self) { try await m.save(Profile(name: "X"), by: Self.other) }
+        #expect(await m.library(of: Self.other).profiles.isEmpty)
+        #expect(await m.revision(of: Self.other) == 0)
+    }
+
     /// User 501 has "Home" (active) and a second, valid "Work"; 501 turned
     /// the VPN on as the daemon would (prepareStart, then start).
     static func setUp(start: Bool = false) async throws -> (Harness, ProfileManager, home: Profile, work: Profile) {
@@ -30,7 +44,7 @@ import Testing
         work.killSwitch = .whileConnected
         let dir = tempDir()
         let lib = ProfileLibrary(profiles: [home, work], activeID: home.id)
-        ProfileManager.store(in: dir.appendingPathComponent("users"), for: me).save(lib)
+        try ProfileManager.store(in: dir.appendingPathComponent("users"), for: me).save(lib)
         let m = ProfileManager(controller: h.controller, usersDir: dir.appendingPathComponent("users"),
                                ownerFile: dir.appendingPathComponent("owner"))
         if start {
@@ -158,7 +172,7 @@ import Testing
         let shared = LibraryStore(url: dir.appendingPathComponent("profiles.json"))
         var lib = ProfileLibrary()
         try lib.upsert(Profile(name: "Old"))
-        shared.save(lib)
+        try? shared.save(lib)
         let users = dir.appendingPathComponent("users")
         ProfileManager.migrateShared(from: shared, to: users, uid: Self.me)
         #expect(ProfileManager.store(in: users, for: Self.me).load().profiles.map(\.name) == ["Old"])
@@ -176,7 +190,7 @@ import Testing
         let h = Harness()
         var home = await h.controller.profile
         home.name = "Home"
-        shared.save(ProfileLibrary(profiles: [home], activeID: home.id))
+        try? shared.save(ProfileLibrary(profiles: [home], activeID: home.id))
         let users = dir.appendingPathComponent("users")
         let ownerFile = dir.appendingPathComponent("owner")
         // As the daemon does: move, then make the mover the owner.
@@ -191,7 +205,7 @@ import Testing
         let store = Self.tempStore()
         var lib = ProfileLibrary()
         try lib.upsert(Profile.example(name: "Home", tunnels: [Harness.h2]))
-        store.save(lib)
+        try store.save(lib)
         #expect(store.load() == lib)
         let attrs = try FileManager.default.attributesOfItem(atPath: store.url.path)
         #expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
@@ -224,7 +238,7 @@ import Testing
         // Saving afterwards does not touch the set-aside file.
         var fresh = ProfileLibrary()
         try fresh.upsert(Profile(name: "New"))
-        store.save(fresh)
+        try store.save(fresh)
         #expect(try Data(contentsOf: kept) == junk)
     }
 
@@ -232,9 +246,9 @@ import Testing
         let store = Self.tempStore()
         var lib = ProfileLibrary()
         try lib.upsert(Profile(name: "One"))
-        store.save(lib)
+        try store.save(lib)
         try lib.upsert(Profile(name: "Two"))
-        store.save(lib)
+        try store.save(lib)
         let prev = try JSONDecoder().decode(ProfileLibrary.self, from: Data(contentsOf: store.url.appendingPathExtension("prev")))
         #expect(prev.profiles.map(\.name) == ["One"])
         #expect(store.load().profiles.map(\.name) == ["One", "Two"])

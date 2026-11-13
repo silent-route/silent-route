@@ -50,10 +50,19 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
 
     func verifyBinary() throws {
         let path = paths.singBox.path
-        let attrs = try FileManager.default.attributesOfItem(atPath: path)
-        guard (attrs[.ownerAccountID] as? NSNumber)?.intValue == 0,
-              let perms = (attrs[.posixPermissions] as? NSNumber)?.intValue, perms & 0o022 == 0 else {
-            throw Refused(errorDescription: "sing-box at \(path) is writable by non-root users; refusing to run it")
+        // The file and every folder above it: a folder others can write to
+        // would let them swap the file between this check and the exec. Ours
+        // (the file, bin, the installation) are root's alone; the system's
+        // above them must at least be root's and not open to everyone (some
+        // Macs let admins write to /Library/Application Support).
+        var url = paths.singBox
+        while true {
+            let ours = url.path.hasPrefix(paths.root.path)
+            guard Self.rootOwned(url.path, groupMayWrite: !ours) else {
+                throw Refused(errorDescription: "\(url.path) is writable by non-root users; refusing to run sing-box")
+            }
+            if url.path == "/" { break }
+            url.deleteLastPathComponent()
         }
         guard let want = expectedSHA256 else { throw Refused(errorDescription: "no pinned sing-box for this CPU") }
         let got = SHA256.hash(data: try Data(contentsOf: paths.singBox, options: .mappedIfSafe))
@@ -61,6 +70,14 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
         guard got == want else {
             throw Refused(errorDescription: "sing-box does not match the pinned checksum; reinstall Silent Route")
         }
+    }
+
+    /// Owned by root, not a link, and not writable by others (nor by the
+    /// group, unless `groupMayWrite`).
+    static func rootOwned(_ path: String, groupMayWrite: Bool) -> Bool {
+        var st = stat()
+        guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) != S_IFLNK else { return false }
+        return st.st_uid == 0 && st.st_mode & (groupMayWrite ? 0o002 : 0o022) == 0
     }
 
     func writeConfig(_ data: Data) throws {
@@ -89,7 +106,8 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
         if let session = output() {
             log = session
         } else {
-            try FileManager.default.createDirectory(at: paths.logs, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: paths.run, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
             rotateLog()
             if !FileManager.default.fileExists(atPath: paths.singBoxLog.path) {
                 FileManager.default.createFile(atPath: paths.singBoxLog.path, contents: nil, attributes: [.posixPermissions: 0o600])

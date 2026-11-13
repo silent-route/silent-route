@@ -222,4 +222,8 @@ MainActor.assumeIsolated {
                                              model: model(.ready, connected)))
     render("update-resuming", UpdateWindowView(updater: .preview(resuming: true), model: model(.ready, reconnecting)))
     render("route-editor", RouteEditor(route: streaming, profile: home, isNew: false, isDefault: false) { _ in })
+    var apple = streaming
+    apple.conditions.apps = [.safari, .webKitNetworking]
+    apple.target = .direct
+    render("route-editor-apple", RouteEditor(route: apple, profile: home, isNew: false, isDefault: false) { _ in })
 }

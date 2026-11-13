@@ -40,6 +40,7 @@ final class TrafficMonitor {
         var id: String { bundlePath ?? executable }
         /// Where it is on disk, for a tooltip.
         var path: String { bundlePath ?? executable }
+        var isSafari: Bool { bundlePath.map { AppMatcher.bundle(path: $0).isSafari } ?? false }
     }
 
     struct AppTraffic: Identifiable, Equatable {
@@ -200,6 +201,11 @@ final class TrafficMonitor {
         var path = processPath
         if let r = path.range(of: #" \([^()]*\)$"#, options: .regularExpression) { path.removeSubrange(r) }
         guard !path.isEmpty else { return AppRef(name: "System", bundlePath: nil, executable: "") }
+        // Apple's shared web content process (Safari, Mail, the App Store…):
+        // named for what it is, not after any one app.
+        if (path as NSString).lastPathComponent == AppMatcher.webKitNetworkingName {
+            return AppRef(name: "Apple web content (WebKit)", bundlePath: nil, executable: path)
+        }
         if let r = path.range(of: ".app/") {
             let bundle = String(path[..<r.lowerBound]) + ".app"
             // The outermost app: helpers live in nested bundles

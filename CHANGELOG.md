@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.3-beta
+## 1.4.4-beta
 
 Everything that changed since 1.0.1-beta.
 
@@ -68,6 +68,7 @@ All three are off by default and live where they apply. Leave them alone unless 
 
 ### Improved
 
+- **Safari and Apple web content.** Safari runs from macOS's updatable system part (a cryptex; /Applications/Safari.app is only a link), so a route listing Safari never matched it: now it does. The web pages Safari, Mail, the App Store and other Apple apps show load through one shared system process; a route's new **Apple web content** setting decides where they go — set in the route only, with a warning of what it affects (Mail, the App Store, sign-in windows); nothing on the Mac is changed, and turning the VPN off or Emergency Restore puts everything back. Safari listed in a route or added from Monitor says that its pages follow that setting; in Monitor that process shows as *Apple web content (WebKit)*.
 - **A new profile can be turned on as it is.** *Everything else* now starts direct instead of "through servers" with none chosen, which could not be turned on: "only this app through the tunnel, the rest untouched" works without touching it. It can still be sent through any servers, or blocked, in its Edit…. A profile with servers that no route uses says so (everything would go direct); one whose *Everything else* has no servers says how to fix it.
 - **Fewer dropped connections on network changes.** A Wi-Fi switch or waking from sleep no longer restarts sing-box at once: the helper checks the servers every 2 seconds and restarts only after 12 seconds without any answer. Short drops pass without breaking calls, downloads or open pages. Routes with a kill switch stay blocked meanwhile, as before.
 - Routes can be reordered with the up/down arrows on each route, like the servers inside a route.
@@ -126,6 +127,10 @@ If your copy shows an update it cannot install, quit Silent Route and open it ag
 - **A VPN that was on during the update comes back with your profile.** When the profiles of an earlier version move to the user who installs the update, that user also becomes the owner of the running VPN, so it reconnects with their profile rather than an empty one.
 
 ### Security
+
+- The helper (root) never follows a path a user could have prepared: removing users' logs is done by descriptor or as that user, nothing is written by path in /Library/Logs, sing-box's folders are checked along with the file, and the `sroute` link is replaced without following what is there.
+- A profile save that could not be written (a full disk) is reported, and nothing changes, instead of looking saved.
+- A Shadowsocks link with an empty plugin name crashed the app; links, rule lines and profiles are now fuzz-tested.
 
 - **The Wi-Fi login proxy's password no longer appears on a command line,** where any user of the Mac could read it with `ps`; it is the one way past the kill switch while a network wants a login.
 - **The helper refuses a request it cannot attribute to a user,** instead of treating it as coming from root; and at most three server checks (each a sing-box run) go at once.

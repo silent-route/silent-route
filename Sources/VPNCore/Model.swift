@@ -613,6 +613,27 @@ public enum AppMatcher: Codable, Hashable, Sendable {
     case processName(String)
 }
 
+extension AppMatcher {
+    /// Apple's web content: the system process that loads the web pages
+    /// Apple's apps show — Safari, Mail, the App Store and others — one per
+    /// app, all with this name, so traffic cannot tell them apart. A route
+    /// takes it only as a setting of its own ("Apple web content"), never
+    /// implied by an app.
+    public static let webKitNetworking = AppMatcher.processName(webKitNetworkingName)
+    public static let webKitNetworkingName = "com.apple.WebKit.Networking"
+
+    /// Safari, by the link in /Applications (where people find it).
+    public static let safari = AppMatcher.bundle(path: "/Applications/Safari.app")
+
+    /// Safari, by the link in /Applications or where macOS keeps it.
+    public var isSafari: Bool {
+        guard case .bundle(let path) = self else { return false }
+        var p = path
+        while p.hasSuffix("/") { p.removeLast() }
+        return SingBoxConfig.cryptexAppName(p) == "Safari.app"
+    }
+}
+
 public struct PortRange: Codable, Hashable, Sendable {
     public var lower: UInt16
     public var upper: UInt16

@@ -421,19 +421,25 @@ public final class AppModel {
         return await Self.runInstaller(script, args)
     }
 
+    /// One installer at a time: NSAppleScript is not safe to run twice at
+    /// once, and two installers (an update and Update Helper) must not race.
+    nonisolated private static let installerLock = NSLock()
+
     /// `script` with `args`, as root, after macOS's password prompt.
     nonisolated static func runInstaller(_ script: URL, _ args: [String]) async -> PrivilegedResult {
-        await Task.detached { () -> PrivilegedResult in
-            func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-            let command = ([script.path] + args).map(q).joined(separator: " ")
-            let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-            var error: NSDictionary?
-            NSAppleScript(source: "do shell script \"\(escaped)\" with administrator privileges")?.executeAndReturnError(&error)
-            guard let error else { return .done }
-            // -128: the user cancelled the password prompt.
-            if (error[NSAppleScript.errorNumber] as? Int) == -128 { return .cancelled }
-            return .failed(error[NSAppleScript.errorMessage] as? String ?? "\(error)")
-        }.value
+        await Task.detached { installerLock.withLock { runInstallerNow(script, args) } }.value
+    }
+
+    nonisolated private static func runInstallerNow(_ script: URL, _ args: [String]) -> PrivilegedResult {
+        func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let command = ([script.path] + args).map(q).joined(separator: " ")
+        let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        var error: NSDictionary?
+        NSAppleScript(source: "do shell script \"\(escaped)\" with administrator privileges")?.executeAndReturnError(&error)
+        guard let error else { return .done }
+        // -128: the user cancelled the password prompt.
+        if (error[NSAppleScript.errorNumber] as? Int) == -128 { return .cancelled }
+        return .failed(error[NSAppleScript.errorMessage] as? String ?? "\(error)")
     }
 
     /// Install and update are the same operation; profiles are kept.

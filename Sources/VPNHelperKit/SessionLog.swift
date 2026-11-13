@@ -29,7 +29,6 @@ public final class SessionLog: @unchecked Sendable {
     /// The user's home folder and group, by uid.
     public typealias HomeLookup = @Sendable (uid_t) -> (path: String, gid: gid_t)?
 
-    let system: URL
     let home: HomeLookup
     let keep: Int
     let maxBytes: Int
@@ -39,14 +38,13 @@ public final class SessionLog: @unchecked Sendable {
     /// The current session's folder and file.
     private var dirFD: Int32 = -1
     private var fileFD: Int32 = -1
-    /// Who turned the VPN on, given just before the session begins.
+    /// Who turned the VPN on, given just before the session begins — for a
+    /// session resumed after a helper restart, the owner the helper keeps in
+    /// its own root-only folder (`ProfileManager.owner`).
     private var pendingOwner: uid_t?
 
-    /// - Parameter system: root's own folder (`/Library/Logs/Silent Route`),
-    ///   where only the owner of the last session is remembered.
-    public init(system: URL, home: @escaping HomeLookup = SessionLog.passwdHome,
+    public init(home: @escaping HomeLookup = SessionLog.passwdHome,
                 keep: Int = 30, maxBytes: Int = 5_000_000, headBytes: Int = 1_000_000) {
-        self.system = system
         self.home = home
         self.keep = keep
         self.maxBytes = maxBytes
@@ -60,7 +58,8 @@ public final class SessionLog: @unchecked Sendable {
 
     // MARK: Writing
 
-    /// The user turning the VPN on now; their uid comes with their request.
+    /// The user turning the VPN on now (their uid comes with their request),
+    /// or the owner of a session about to resume.
     public func setOwner(_ uid: uid_t) {
         lock.withLock { pendingOwner = uid }
     }
@@ -109,19 +108,14 @@ public final class SessionLog: @unchecked Sendable {
 
     // MARK: Session files
 
-    /// The owner of a resumed session: whoever turned it on before the
-    /// helper restarted, remembered in root's folder.
-    private var lastOwnerFile: URL { system.appendingPathComponent("last-owner") }
-
+    /// Nothing is remembered here: the helper knows the owner and says so
+    /// before a session begins. (Earlier builds kept it in
+    /// /Library/Logs/Silent Route, written by path; that folder is not the
+    /// helper's own to trust.) Without an owner, no session file: sing-box's
+    /// output then goes to the helper's own folder.
     private func openLocked(profile: String, resumed: Bool, at date: Date) {
-        let saved = (try? String(contentsOf: lastOwnerFile, encoding: .utf8))
-            .flatMap { uid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        let owner = (resumed ? saved : pendingOwner) ?? pendingOwner ?? saved ?? 0
+        guard let owner = pendingOwner else { return }
         pendingOwner = nil
-        try? FileManager.default.createDirectory(at: system, withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
-        try? Data(String(owner).utf8).write(to: lastOwnerFile)
-
         guard let (homePath, gid) = home(owner),
               let dir = Self.openSessionsFolder(home: homePath, uid: owner, gid: gid) else { return }
         var name = SessionLogFormat.fileName(for: date)
@@ -189,7 +183,7 @@ public final class SessionLog: @unchecked Sendable {
     static func openSessionsFolder(home: String, uid: uid_t, gid: gid_t) -> Int32? {
         var fd = open(home, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return nil }
-        guard owned(fd, by: uid) else { close(fd); return nil }
+        guard SafeRemove.owned(fd, by: uid) else { close(fd); return nil }
         let base = SessionLogFormat.base
         for (i, component) in base.enumerated() {
             // ~/Library and ~/Library/Logs exist in every home; ours is
@@ -222,12 +216,8 @@ public final class SessionLog: @unchecked Sendable {
             _ = fchmod(fd, mode)
         }
         guard fd >= 0 else { return nil }
-        guard owned(fd, by: uid) else { close(fd); return nil }
+        guard SafeRemove.owned(fd, by: uid) else { close(fd); return nil }
         return fd
     }
 
-    private static func owned(_ fd: Int32, by uid: uid_t) -> Bool {
-        var st = stat()
-        return fstat(fd, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR && st.st_uid == uid
-    }
 }

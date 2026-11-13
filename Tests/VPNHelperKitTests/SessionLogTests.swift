@@ -9,14 +9,13 @@ import Testing
     struct Env {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sl-\(UUID().uuidString)")
         var home: URL { root.appendingPathComponent("home") }
-        var system: URL { root.appendingPathComponent("system") }
         var sessions: URL { home.appendingPathComponent("Library/Logs/Silent Route/\(SessionLogFormat.unindexed)") }
         let me = getuid()
         init() { try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true) }
         func log(keep: Int = 30, maxBytes: Int = 5_000_000, headBytes: Int = 1_000_000,
                  asked: Asked? = nil) -> SessionLog {
             let h = home.path, g = getgid()
-            return SessionLog(system: system, home: { uid in asked?.add(uid); return (h, g) },
+            return SessionLog(home: { uid in asked?.add(uid); return (h, g) },
                               keep: keep, maxBytes: maxBytes, headBytes: headBytes)
         }
         func files() -> [String] {
@@ -133,19 +132,21 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: env.sessions.path))
     }
 
-    /// A session resumed after a helper restart stays with whoever began it.
-    @Test func aResumedSessionKeepsItsOwner() {
+    /// A session resumed after a helper restart is logged for the owner the
+    /// helper passes on (it keeps the owner in its own root-only folder);
+    /// with no owner given, nothing is written anywhere.
+    @Test func aResumedSessionIsLoggedForTheOwnerGiven() {
         let env = Env()
         defer { env.cleanup() }
         let asked = Asked()
-        let log = env.log(asked: asked)
-        log.setOwner(env.me)
-        log.handle(.began(profile: "X", resumed: false))
-        log.handle(.ended(reason: "the helper stopped"))
         let restarted = env.log(asked: asked)              // a new helper process
         restarted.handle(.began(profile: "X", resumed: true))
+        #expect(restarted.engineOutput() == nil, "no owner, no file")
+        restarted.setOwner(env.me)
+        restarted.handle(.began(profile: "X", resumed: true))
         restarted.handle(.ended(reason: "turned off"))
-        #expect(asked.all == [env.me, env.me])
+        #expect(asked.all == [env.me])
+        #expect(env.files().count == 1)
     }
 
     @Test func fileNames() {
@@ -165,5 +166,42 @@ struct LogStoreReader {
         let dir = base.appendingPathComponent(SessionLogFormat.unindexed)
         return ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
             .filter(SessionLogFormat.isSessionFile).sorted()
+    }
+}
+
+/// The uninstaller's removal of a user's logs (as root, in a folder the
+/// user controls).
+@Suite struct SafeRemoveTests {
+    @Test func removesTheLogsAndNothingElse() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("sr-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let logs = home.appendingPathComponent("Library/Logs/Silent Route/Sessions.noindex")
+        try fm.createDirectory(at: logs, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: logs.appendingPathComponent("a.log"))
+        // A link inside points elsewhere: the link goes, its target stays.
+        let elsewhere = root.appendingPathComponent("elsewhere")
+        try fm.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: elsewhere.appendingPathComponent("keep.txt"))
+        try fm.createSymbolicLink(at: logs.appendingPathComponent("link"), withDestinationURL: elsewhere)
+        SafeRemove.userLogs(home: home.path, uid: getuid())
+        #expect(!fm.fileExists(atPath: home.appendingPathComponent("Library/Logs/Silent Route").path))
+        #expect(fm.fileExists(atPath: home.appendingPathComponent("Library/Logs").path))
+        #expect(fm.fileExists(atPath: elsewhere.appendingPathComponent("keep.txt").path))
+    }
+
+    /// ~/Library/Logs swapped for a link: nothing is removed through it.
+    @Test func aLinkOnTheWayIsNotFollowed() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("sr-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let target = root.appendingPathComponent("target")
+        try fm.createDirectory(at: target.appendingPathComponent("Silent Route"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: home.appendingPathComponent("Library"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: home.appendingPathComponent("Library/Logs"), withDestinationURL: target)
+        SafeRemove.userLogs(home: home.path, uid: getuid())
+        #expect(fm.fileExists(atPath: target.appendingPathComponent("Silent Route").path))
     }
 }

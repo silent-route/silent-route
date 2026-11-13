@@ -214,6 +214,7 @@ struct MonitorView: View {
                 HStack(spacing: 6) {
                     ProcessIcon(app: a.app)
                     Text(a.name).lineLimit(1)
+                    if a.app.isSafari { SafariPagesMark() }
                     if a.pin != nil { PinMark() }
                 }
                 .help(a.app.path)
@@ -242,6 +243,7 @@ struct MonitorView: View {
                 HStack(spacing: 6) {
                     ProcessIcon(app: c.app)
                     Text(c.appName).lineLimit(1)
+                    if c.app.isSafari { SafariPagesMark() }
                     if c.pin != nil { PinMark() }
                 }
                 .help(c.app.path)
@@ -290,14 +292,19 @@ struct MonitorView: View {
             .dimmed(!isLive)
     }
 
-    private func canAdd(_ app: TrafficMonitor.AppRef) -> Bool { RouteAddition.matcher(for: app) != nil }
+    /// Apple's web content is not added from here: it is a route setting of
+    /// its own (Apple web content), set in the route.
+    private func canAdd(_ app: TrafficMonitor.AppRef) -> Bool { RouteAddition.canAdd(app) }
 
     // MARK: Menus
 
     @ViewBuilder
     private func appMenu(_ rows: [AppRow]) -> some View {
         if rows.count == 1, let r = rows.first {
-            Button("Add to Route…") { adding = RouteSubject(app: r.app) }.disabled(!canAdd(r.app))
+            Button("Add to Route…") { adding = RouteSubject(app: r.app) }
+                .disabled(!canAdd(r.app))
+                .help(RouteAddition.matcher(for: r.app) == .webKitNetworking
+                      ? "Apple web content is a setting of each route: edit the route and turn it on there." : "")
             Divider()
         }
         pinItems(rows.map { ($0.id, $0.pin) }, count: pins.apps.items.count,
@@ -360,6 +367,16 @@ struct MonitorView: View {
     }
 }
 
+/// On Safari's rows: its pages are not here.
+private struct SafariPagesMark: View {
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help("Safari's web pages load through Apple's web content process: they show as “Apple web content (WebKit)”, and routes take them by their “Apple web content” setting.")
+    }
+}
+
 /// Marks a pinned row.
 private struct PinMark: View {
     var body: some View {
@@ -383,7 +400,8 @@ struct ProcessIcon: View {
         if let b = app.bundlePath {
             Image(nsImage: NSWorkspace.shared.icon(forFile: b)).resizable().frame(width: size, height: size)
         } else {
-            Image(systemName: app.executable.isEmpty ? "gearshape" : "terminal")
+            Image(systemName: app.executable.isEmpty ? "gearshape"
+                  : app.executable.hasSuffix("/" + AppMatcher.webKitNetworkingName) ? "globe" : "terminal")
                 .font(.system(size: size * 0.8))
                 .frame(width: size, height: size).foregroundStyle(.secondary)
         }

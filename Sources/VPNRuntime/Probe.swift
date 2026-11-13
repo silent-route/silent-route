@@ -39,7 +39,7 @@ public enum Probe {
         // The port is open on localhost while the check runs: a fresh
         // password keeps everything else on the Mac off it.
         let user = "probe"
-        let password = (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined()
+        let password = Secret.random()
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("silentroute-probe-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
@@ -60,17 +60,13 @@ public enum Probe {
         process.standardOutput = log
         process.standardError = log
         try process.run()
-        defer {
-            if process.isRunning { process.terminate() }
-            process.waitUntilExit()
-        }
+        defer { stop(process) }
 
         // Wait for the SOCKS port rather than sleeping a fixed time.
         let deadline = Date().addingTimeInterval(5)
         while !portOpen(socksPort) {
             if !process.isRunning || Date() > deadline {
-                if process.isRunning { process.terminate() }
-                process.waitUntilExit()
+                stop(process)
                 let text = String(decoding: log.fileHandleForReading.availableData, as: UTF8.self)
                 throw Failure.singBoxDidNotStart(text)
             }
@@ -105,6 +101,17 @@ public enum Probe {
         let warnings: [String] = []
         return Report(ip: info.ip, country: info.country, city: info.city, org: info.org,
                       latencyMs: latency, warnings: warnings)
+    }
+
+    /// SIGTERM, then SIGKILL after 3 s: a check must end, and must not keep
+    /// a server-check slot (or the caller) waiting on a sing-box that hangs.
+    static func stop(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        let deadline = Date().addingTimeInterval(3)
+        while process.isRunning, Date() < deadline { usleep(50_000) }
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        process.waitUntilExit()
     }
 
     static func portOpen(_ port: UInt16) -> Bool {

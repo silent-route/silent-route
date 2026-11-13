@@ -28,26 +28,17 @@ enum SelfRemoval {
     }
 
     /// Every local user's ~/Library/Logs/Silent Route, as the uninstaller
-    /// removes them. Only that exact path: if any folder on the way is a
-    /// symbolic link, only a link itself is removed, never its target.
+    /// removes them. Everything is done through descriptors opened without
+    /// following links, each folder checked to be the user's: a link, or a
+    /// folder swapped for one meanwhile, is never followed to delete
+    /// something else.
     static func removeUserLogs() async {
-        let r = await Command.run("/usr/bin/dscl", [".", "-list", "/Users", "NFSHomeDirectory"])
-        let fm = FileManager.default
+        let r = await Command.run("/usr/bin/dscl", [".", "-list", "/Users", "UniqueID"])
         for line in r.text.split(separator: "\n") {
-            let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-            guard parts.count == 2, !parts[0].hasPrefix("_") else { continue }
-            let home = parts[1].trimmingCharacters(in: .whitespaces)
-            var path = home
-            var safe = true
-            for component in SessionLogFormat.base {
-                path += "/" + component
-                if (try? fm.destinationOfSymbolicLink(atPath: path)) != nil {
-                    if component == SessionLogFormat.base.last { try? fm.removeItem(atPath: path) }
-                    safe = false
-                    break
-                }
-            }
-            if safe { try? fm.removeItem(atPath: path) }
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count == 2, !parts[0].hasPrefix("_"), let uid = uid_t(parts[1]), uid == 0 || uid >= 500,
+                  let pw = getpwuid(uid), let dir = pw.pointee.pw_dir else { continue }
+            SafeRemove.userLogs(home: String(cString: dir), uid: uid)
         }
     }
 }

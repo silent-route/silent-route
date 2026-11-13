@@ -311,6 +311,16 @@ enum Fixtures {
         #expect(SingBoxConfig.appRegex(.executable(path: "/a/b+c (1).app")) == #"^/a/b\+c \(1\)\.app$"#)
         #expect(SingBoxConfig.appRegex(.bundle(path: "/Applications/X.app/")) == #"^/Applications/X\.app/"#)
         #expect(SingBoxConfig.appRegex(.processName("a.b")) == #"/a\.b$"#)
+        // Safari runs from the system cryptex, under either name; other apps
+        // keep their one path.
+        let cryptex = #"^(?:/System/Volumes/Preboot|/System)/Cryptexes/App/System/Applications/Safari\.app/"#
+        #expect(SingBoxConfig.appRegexes(.bundle(path: "/Applications/Safari.app")) == [#"^/Applications/Safari\.app/"#, cryptex])
+        #expect(SingBoxConfig.appRegexes(.bundle(path: "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app")).last == cryptex)
+        #expect(SingBoxConfig.appRegexes(.bundle(path: "/Applications/Telegram.app")).count == 1)
+        for path in ["/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app/Contents/MacOS/Safari",
+                     "/System/Cryptexes/App/System/Applications/Safari.app/Contents/MacOS/Safari"] {
+            #expect(path.range(of: cryptex, options: .regularExpression) != nil)
+        }
     }
 
     /// SOCKS5 carries TCP only unless UDP is asked for; HTTP never has UDP.

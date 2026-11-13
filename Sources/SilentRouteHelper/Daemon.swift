@@ -19,6 +19,9 @@ enum Daemon {
         try? fm.createDirectory(at: paths.root, withIntermediateDirectories: true)
         try? fm.createDirectory(at: paths.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         umask(0o077)
+        // A child that exits before reading what we write to it must not end
+        // the helper: the write fails with EPIPE instead.
+        signal(SIGPIPE, SIG_IGN)
 
         let group = getgrnam(Paths.groupName).map { $0.pointee.gr_gid } ?? 0
         if group == 0 { log.error("group \(Paths.groupName, privacy: .public) is missing; connections will be refused") }
@@ -55,12 +58,10 @@ enum Daemon {
             geoIPCountries: countries, siteLists: siteLists)
 
         // Session logs go into the home of whoever turned the VPN on. Earlier
-        // builds kept a shared sing-box.log (readable by every user) and
-        // root's own session folders: both go.
-        let sessionLog = SessionLog(system: paths.logs)
-        try? fm.removeItem(at: paths.singBoxLog)
-        try? fm.removeItem(at: paths.singBoxLog.appendingPathExtension("1"))
-        try? fm.removeItem(at: paths.logs.appendingPathComponent("sessions"))
+        // builds kept a shared sing-box.log (readable by every user), root's
+        // own session folders and the last session's owner there: all go.
+        let sessionLog = SessionLog()
+        Daemon.removeLegacyLogs(paths)
         var options = Controller.Options(singBoxGroup: group, configEnvironment: env)
         options.captivePort = freePort()
         let engine = SingBoxEngine(paths: paths, group: group, trampoline: paths.helper.path,
@@ -167,6 +168,18 @@ enum Daemon {
 
         withExtendedLifetime((listener, delegate, monitor, term)) {
             dispatchMain()
+        }
+    }
+
+    /// What earlier builds left in /Library/Logs/Silent Route. Only from
+    /// that folder as root made it — a real folder of root's, not a link —
+    /// so a path someone else prepared never leads the removal elsewhere.
+    static func removeLegacyLogs(_ paths: Paths) {
+        var st = stat()
+        guard lstat(paths.logs.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR, st.st_uid == 0 else { return }
+        let fm = FileManager.default
+        for name in ["sing-box.log", "sing-box.log.1", "sessions", "last-owner"] {
+            try? fm.removeItem(at: paths.logs.appendingPathComponent(name))
         }
     }
 

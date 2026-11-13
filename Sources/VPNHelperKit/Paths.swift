@@ -33,8 +33,11 @@ public struct Paths: Sendable {
     /// library of an earlier version.
     public var migrateOwner: URL { root.appendingPathComponent("migrate-owner") }
     public var state: URL { root.appendingPathComponent("state.json") }
+    /// Root's log folder: helper.log (launchd writes the helper's stderr).
     public var logs: URL { URL(fileURLWithPath: "/Library/Logs/Silent Route") }
-    public var singBoxLog: URL { logs.appendingPathComponent("sing-box.log") }
+    /// sing-box's output when no session log takes it (no owner known): in
+    /// the helper's own root-only folder.
+    public var singBoxLog: URL { run.appendingPathComponent("sing-box.log") }
 
     public static let bundleID = "org.silentroute.app"
     public static let machService = "org.silentroute.app.helper"

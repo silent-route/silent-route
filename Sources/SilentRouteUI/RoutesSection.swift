@@ -253,7 +253,8 @@ enum RouteSummary {
     }
 
     static func appName(_ a: AppMatcher) -> String {
-        switch a {
+        if a == .webKitNetworking { return "Apple web content" }
+        return switch a {
         case .bundle(let path): URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         case .executable(let path): URL(fileURLWithPath: path).lastPathComponent
         case .processName(let n): n
@@ -484,13 +485,28 @@ struct RouteEditor: View {
         }
     }
 
+    /// Apple's web content, as a setting of its own: the one thing that
+    /// decides where the pages of Safari, Mail, the App Store… go. Choosing
+    /// an app never turns it on or off.
+    private var appleWebContent: Binding<Bool> {
+        Binding(get: { route.conditions.apps.contains(.webKitNetworking) }, set: { on in
+            route.conditions.apps.removeAll { $0 == .webKitNetworking }
+            if on { route.conditions.apps.append(.webKitNetworking) }
+        })
+    }
+
     private var apps: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(route.conditions.apps, id: \.self) { a in
+            ForEach(route.conditions.apps.filter { $0 != .webKitNetworking }, id: \.self) { a in
                 HStack {
                     AppIcon(matcher: a)
                     Text(RouteSummary.appName(a))
-                    Text(appKind(a)).font(.caption).foregroundStyle(.secondary)
+                    if a.isSafari {
+                        Label("Web pages follow Apple web content below", systemImage: "info.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text(appKind(a)).font(.caption).foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Button { route.conditions.apps.removeAll { $0 == a } } label: { Image(systemName: "minus.circle") }
                         .buttonStyle(.borderless)
@@ -504,11 +520,33 @@ struct RouteEditor: View {
                     .onSubmit(addProcess)
                 Button("Add", action: addProcess).disabled(processName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            Toggle(isOn: appleWebContent) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        AppIcon(matcher: .webKitNetworking)
+                        Text("Apple web content")
+                    }
+                    Text("Web pages shown by Apple's apps — Safari, Mail, the App Store and others — load through one shared system process (com.apple.WebKit.Networking), so they cannot be told apart: this setting decides for all of them, whichever apps are listed above.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, 4)
+            if appleWebContent.wrappedValue {
+                // As the kill switch's warning: what it can do to the Mac.
+                Label(route.target == .block
+                      ? "Blocked, Apple's apps can no longer load web pages: Mail's messages, the App Store, sign-in and help windows. Turning the VPN off or Emergency Restore puts everything back."
+                      : "Apple's apps — Mail, the App Store, sign-in and help windows — then load their pages this way, and stop if it does not answer. Nothing on the Mac is changed: turning the VPN off or Emergency Restore puts everything back.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
     private func appKind(_ a: AppMatcher) -> String {
-        switch a {
+        if a == .webKitNetworking { return "Safari, Mail, the App Store…" }
+        return switch a {
         case .bundle: "app"
         case .executable(let p): p
         case .processName: "process"
@@ -540,7 +578,9 @@ struct RouteEditor: View {
 struct AppIcon: View {
     let matcher: AppMatcher
     var body: some View {
-        if case .bundle(let path) = matcher {
+        if matcher == .webKitNetworking {
+            Image(systemName: "globe").frame(width: 18, height: 18).foregroundStyle(.secondary)
+        } else if case .bundle(let path) = matcher {
             Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: 18, height: 18)
         } else {
             Image(systemName: "terminal").frame(width: 18, height: 18).foregroundStyle(.secondary)

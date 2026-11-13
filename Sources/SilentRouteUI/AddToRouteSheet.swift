@@ -51,7 +51,7 @@ struct AddToRouteSheet: View {
     private var item: RouteAddition.Item? {
         switch kind {
         case .site: destination.map(RouteAddition.Item.destination)
-        case .app: RouteAddition.matcher(for: subject.app).map(RouteAddition.Item.app)
+        case .app: RouteAddition.canAdd(subject.app) ? RouteAddition.matcher(for: subject.app).map(RouteAddition.Item.app) : nil
         }
     }
 
@@ -86,6 +86,9 @@ struct AddToRouteSheet: View {
     /// What stops Add.
     private var problem: String? {
         guard let item else {
+            if kind == .app, RouteAddition.matcher(for: subject.app) == .webKitNetworking {
+                return "Apple web content is a setting of each route: edit the route and turn it on there."
+            }
             return kind == .app ? "This traffic has no app to match: macOS did not say which program sent it."
                                 : "This host cannot become a rule."
         }
@@ -114,6 +117,9 @@ struct AddToRouteSheet: View {
             }
             if !route.enabled { out.append(Note(text: "This route is turned off: turn it on in the profile for it to work.", warning: true)) }
         }
+        if case .app(let m)? = item, m.isSafari {
+            out.append(Note(text: "Safari's web pages follow the route's Apple web content setting, which also covers Mail, the App Store and other Apple apps.", warning: false))
+        }
         if routeChoice == .new {
             out.append(Note(text: "The new route goes to the top of the list, so it is checked before the others.", warning: false))
         }
@@ -121,6 +127,16 @@ struct AddToRouteSheet: View {
             out.append(Note(text: "This profile is in use: the change applies right away, and open connections restart.", warning: false))
         }
         return out
+    }
+
+    private var footerText: String {
+        guard kind == .app else { return "Connections to this site from any app." }
+        switch item {
+        case .app(let m)? where m.isSafari:
+            return "Safari's own process."
+        default:
+            return "Everything this app sends, including its helper processes."
+        }
     }
 
     // MARK: View
@@ -141,7 +157,7 @@ struct AddToRouteSheet: View {
 
             Form {
                 Section {
-                    if subject.host != nil {
+                    if subject.host != nil, RouteAddition.canAdd(subject.app) {
                         Picker("Match", selection: $kind) {
                             Text("Site").tag(Kind.site)
                             Text("App").tag(Kind.app)
@@ -164,8 +180,7 @@ struct AddToRouteSheet: View {
                         }
                     }
                 } footer: {
-                    Text(kind == .app ? "Everything this app sends, including its helper processes."
-                                      : "Connections to this site from any app.")
+                    Text(footerText)
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

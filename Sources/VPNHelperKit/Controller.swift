@@ -272,6 +272,11 @@ public actor Controller {
         await network.releaseLocalDNS()
         localDNS = false
         session(.ended(reason: "Emergency Restore"))
+        via = [:]
+        latency = [:]
+        alive = []
+        strikes = [:]
+        apiSecret = nil
         connectedSince = nil
         sessionSince = nil
         set(.off)
@@ -402,10 +407,16 @@ public actor Controller {
             let up = chain.first { alive.contains($0) }
             let next: RouteState.Via = up.map { .server($0) } ?? (r.killSwitch ? .blocked : .direct)
             guard via[r.id] != next else { continue }
-            let member: String = switch next {
-            case .server(let id): SingBoxConfig.tag(id)
-            case .direct: SingBoxConfig.direct
-            case .blocked: SingBoxConfig.tag(chain[0])
+            // Blocked: its first (dead) server, which fails every connection.
+            // A route with no server at all cannot run (validation refuses
+            // it); never "direct" in its place, which would open it.
+            let member: String
+            switch next {
+            case .server(let id): member = SingBoxConfig.tag(id)
+            case .direct: member = SingBoxConfig.direct
+            case .blocked:
+                guard let first = chain.first else { continue }
+                member = SingBoxConfig.tag(first)
             }
             do {
                 try await engine.select(SingBoxConfig.routeTag(r.id), member: member)
@@ -511,12 +522,12 @@ public actor Controller {
 
     private func makeConfig() throws -> Data {
         var env = options.configEnvironment
-        env.clashAPISecret = (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined()
+        env.clashAPISecret = Secret.random()
         env.localDNS = localDNS
         if let logLevel { env.logLevel = logLevel }
         env.captive = options.captivePort.map {
             .init(port: $0, username: "silentroute",
-                  password: (0..<4).map { _ in String(format: "%08x", UInt32.random(in: .min ... .max)) }.joined())
+                  password: Secret.random())
         }
         let data = try SingBoxConfig.generate(profile, env: env).encoded()
         apiSecret = env.clashAPISecret

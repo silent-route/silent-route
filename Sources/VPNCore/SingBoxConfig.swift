@@ -380,7 +380,7 @@ public enum SingBoxConfig {
             // One field for every kind of app matcher: sing-box AND-s
             // process_name with process_path, which is not what a list of
             // apps means.
-            parts.append(["process_path_regex": .strings(c.apps.map(appRegex))])
+            parts.append(["process_path_regex": .strings(c.apps.flatMap(appRegexes))])
         }
         if !c.ports.isEmpty {
             parts.append(["port_range": .strings(c.ports.map { "\($0.lower):\($0.upper)" })])
@@ -418,15 +418,41 @@ public enum SingBoxConfig {
                         "action": "reject"])
     }
 
-    static func appRegex(_ a: AppMatcher) -> String {
+    static func appRegex(_ a: AppMatcher) -> String { appRegexes(a)[0] }
+
+    /// Every path the matcher's processes run from. Usually one; an Apple
+    /// app that macOS keeps in its updatable system part (a cryptex — today
+    /// Safari) runs from there, under either of two names, while it shows
+    /// in /Applications only as a link — which a process path never is.
+    static func appRegexes(_ a: AppMatcher) -> [String] {
         switch a {
         case .bundle(let path):
             var p = path
             while p.hasSuffix("/") { p.removeLast() }
-            return "^" + regexEscape(p) + "/"
-        case .executable(let path): return "^" + regexEscape(path) + "$"
-        case .processName(let name): return "/" + regexEscape(name) + "$"
+            var out = ["^" + regexEscape(p) + "/"]
+            if let name = cryptexAppName(p) {
+                out.append("^(?:/System/Volumes/Preboot|/System)" + regexEscape(cryptexApps + "/" + name) + "/")
+            }
+            return out
+        case .executable(let path): return ["^" + regexEscape(path) + "$"]
+        case .processName(let name): return ["/" + regexEscape(name) + "$"]
         }
+    }
+
+    /// Where macOS keeps cryptex apps: under /System, and the same folder
+    /// as /System/Volumes/Preboot/Cryptexes/… (processes show either).
+    static let cryptexApps = "/Cryptexes/App/System/Applications"
+    /// Apps known to live there, by the link in /Applications.
+    static let knownCryptexApps: Set<String> = ["Safari.app"]
+
+    /// "Safari.app" for /Applications/Safari.app or either cryptex path of
+    /// any app; nil for everything else.
+    static func cryptexAppName(_ path: String) -> String? {
+        let name = (path as NSString).lastPathComponent
+        let parent = (path as NSString).deletingLastPathComponent
+        if parent == "/Applications", knownCryptexApps.contains(name) { return name }
+        if parent == "/System" + cryptexApps || parent == "/System/Volumes/Preboot" + cryptexApps { return name }
+        return nil
     }
 
     static func regexEscape(_ s: String) -> String {
