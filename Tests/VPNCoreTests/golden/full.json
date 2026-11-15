@@ -19,8 +19,8 @@
           "xn--fiqs8s"
         ],
         "rule_set" : [
-          "geosite-cn",
-          "geosite-geolocation-cn"
+          "list-geosite-cn",
+          "list-geosite-geolocation-cn"
         ],
         "server" : "dns-direct"
       },
@@ -177,20 +177,20 @@
     "rule_set" : [
       {
         "format" : "binary",
-        "path" : "/Library/Application Support/Silent Route/rules/geoip-cn.srs",
-        "tag" : "geoip-cn",
+        "path" : "/Library/Application Support/Silent Route/rules/8e68771b1833fdcbadcf5d0a.srs",
+        "tag" : "list-geoip-cn",
         "type" : "local"
       },
       {
         "format" : "binary",
-        "path" : "/Library/Application Support/Silent Route/rules/geosite-cn.srs",
-        "tag" : "geosite-cn",
+        "path" : "/Library/Application Support/Silent Route/rules/732f3234c0558173e1aa20b9.srs",
+        "tag" : "list-geosite-cn",
         "type" : "local"
       },
       {
         "format" : "binary",
-        "path" : "/Library/Application Support/Silent Route/rules/geosite-geolocation-cn.srs",
-        "tag" : "geosite-geolocation-cn",
+        "path" : "/Library/Application Support/Silent Route/rules/f25fc29ccafcd79e717150b4.srs",
+        "tag" : "list-geosite-geolocation-cn",
         "type" : "local"
       }
     ],
@@ -214,9 +214,9 @@
         "rules" : [
           {
             "rule_set" : [
-              "geoip-cn",
-              "geosite-cn",
-              "geosite-geolocation-cn"
+              "list-geoip-cn",
+              "list-geosite-cn",
+              "list-geosite-geolocation-cn"
             ]
           },
           {

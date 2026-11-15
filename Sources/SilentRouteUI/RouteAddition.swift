@@ -76,20 +76,10 @@ enum RouteAddition {
         }
     }
 
-    /// Conditions of different kinds must all match: adding the first app
-    /// to a route of sites (or the first site to a route of apps) narrows
-    /// it to that app's traffic to those sites rather than adding to it.
+    /// Ports or a protocol narrow whatever the route matches: an app or a
+    /// site added to such a route takes only that part of its traffic.
     static func narrows(_ route: Route, _ item: Item) -> Bool {
-        var others = route.conditions
-        switch item {
-        case .app:
-            guard route.conditions.apps.isEmpty else { return false }
-            others.apps = []
-        case .destination:
-            guard route.conditions.destinations.isEmpty else { return false }
-            others.destinations = []
-        }
-        return !others.isEmpty
+        !route.conditions.ports.isEmpty || route.conditions.network != nil
     }
 
     /// The profile with the item added; nil when the route is gone or is

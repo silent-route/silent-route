@@ -202,12 +202,8 @@ do_install() {
   rm -rf "$ROOT/bin.prev"
   [ -d "$ROOT/bin" ] && mv "$ROOT/bin" "$ROOT/bin.prev"
   mv "$stage" "$ROOT/bin"
-  # Address and site lists are not shipped: sing-box downloads the ones a
-  # profile uses. Lists already on disk (from earlier builds) stay in use.
-  for f in "$contents/Resources/sing-box/rules/"*.srs; do
-    [ -f "$f" ] || continue
-    install -o root -g wheel -m 0644 "$f" "$ROOT/rules/"
-  done
+  # Address and site lists are not shipped: the helper downloads the ones
+  # profiles use, and keeps them up to date.
   # The uninstaller lives with the data it removes, so it works without the app.
   install -o root -g wheel -m 0755 "$contents/Resources/install-helper.sh" "$ROOT/uninstall.sh"
   cat > "$ROOT/Uninstall Silent Route.command" <<'EOF'

@@ -97,6 +97,18 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
         guard r.ok else { throw Command.Failed(tool: "sing-box check", output: r.text) }
     }
 
+    /// `sing-box rule-set <arguments>` (compile, decompile): a downloaded
+    /// list is read whole, as sing-box reads it on start. nil: it could;
+    /// else its complaint.
+    public func ruleSet(_ arguments: [String]) async -> String? {
+        do { try verifyBinary() } catch { return error.localizedDescription }
+        let r = await Command.run(paths.singBox.path, ["rule-set"] + arguments, timeout: 60)
+        guard !r.ok else { return nil }
+        let text = r.text.replacingOccurrences(of: #"\u{1B}\[[0-9;]*m"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "exit \(r.status)" : String(text.prefix(200))
+    }
+
     public func launch(config: Data, onExit: @escaping @Sendable (Int32) -> Void) async throws -> Int32 {
         try verifyBinary()
         try writeConfig(config)

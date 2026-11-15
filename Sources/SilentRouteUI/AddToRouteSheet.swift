@@ -111,8 +111,8 @@ struct AddToRouteSheet: View {
         if let route, let item {
             if RouteAddition.narrows(route, item) {
                 out.append(Note(text: kind == .app
-                    ? "This route also has sites, ports or a protocol, and a connection must match all of them: it will then take only this app's traffic to those, not all of it."
-                    : "This route also has apps, ports or a protocol, and a connection must match all of them: it will then take only those apps' traffic to this site.",
+                    ? "This route is limited to some ports or a protocol: it will take only that part of this app's traffic."
+                    : "This route is limited to some ports or a protocol: it will take only that part of the traffic to this site.",
                     warning: true))
             }
             if !route.enabled { out.append(Note(text: "This route is turned off: turn it on in the profile for it to work.", warning: true)) }

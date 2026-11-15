@@ -85,6 +85,13 @@ public enum Validation {
             warn("no route sends traffic through a server yet — everything goes direct", rule: profile.defaultRoute.id)
         }
 
+        var listNames: Set<String> = []
+        for l in profile.lists {
+            if !RuleLists.isValidName(l.name) { error("bad list name \"\(l.name)\" (letters, digits and “-”)") }
+            if !listNames.insert(l.name).inserted { error("two lists are named \"\(l.name)\"") }
+            if !RuleLists.isValidURL(l.url) { error("list \"\(l.name)\": the address must be an https:// link") }
+        }
+
         var routeIDs: Set<UUID> = []
         for r in profile.allRoutes {
             let isDefault = r.id == profile.defaultRoute.id
@@ -114,13 +121,13 @@ public enum Validation {
                     if s.isEmpty || !s.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ".") }) {
                         error("\(label): bad domain keyword \"\(s)\"", rule: r.id)
                     }
-                case .geoSite(let n):
-                    if n.range(of: #"^[a-z0-9][a-z0-9!@._-]*$"#, options: .regularExpression) == nil {
-                        error("\(label): bad site list name \"\(n)\"", rule: r.id)
+                case .list(let n):
+                    if !isDefault, !profile.lists.contains(where: { $0.name == n }) {
+                        error("\(label) uses the list \"\(n)\", which is not in the profile's lists (Network)", rule: r.id)
                     }
-                case .geoIP(let c):
-                    if c.range(of: #"^[a-z]{2}$"#, options: .regularExpression) == nil {
-                        error("\(label): bad country code \"\(c)\" (two letters, like de)", rule: r.id)
+                case .localNetwork:
+                    if profile.lan == .allow {
+                        warn("\(label): local network addresses go directly before any route — to route them here, set Local Network to “by this profile's rules” in Network", rule: r.id)
                     }
                 }
             }

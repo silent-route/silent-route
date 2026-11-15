@@ -135,6 +135,8 @@ struct ServersSection: View {
         }
         .padding(.vertical, 9)
         .contentShape(Rectangle())
+        // As a route's card: a double-click edits.
+        .onTapGesture(count: 2) { editing = EditRequest(draft: ServerDraft(t), isNew: false) }
         .contextMenu { Button("Edit…") { editing = EditRequest(draft: ServerDraft(t), isNew: false) } }
     }
 

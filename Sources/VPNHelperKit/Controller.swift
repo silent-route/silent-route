@@ -49,10 +49,25 @@ public actor Controller {
         /// Environment for config generation, minus the per-start clash API
         /// port and secret, which the controller fills in.
         public var configEnvironment: SingBoxConfig.Environment
+        /// The address and site lists on disk; nil: none (tests).
+        public var ruleLists: RuleListHooks?
 
         public init(singBoxGroup: UInt32, configEnvironment: SingBoxConfig.Environment) {
             self.singBoxGroup = singBoxGroup
             self.configEnvironment = configEnvironment
+        }
+    }
+
+    /// The helper's list store, as the controller uses it.
+    public struct RuleListHooks: Sendable {
+        /// Which of these lists are on disk, and where.
+        public var local: @Sendable ([String]) async -> [String: SingBoxConfig.LocalList]
+        /// Downloads the lists a profile uses that are not on disk yet.
+        public var fetchMissing: @Sendable (Profile) async -> Void
+        public init(local: @escaping @Sendable ([String]) async -> [String: SingBoxConfig.LocalList],
+                    fetchMissing: @escaping @Sendable (Profile) async -> Void) {
+            self.local = local
+            self.fetchMissing = fetchMissing
         }
     }
 
@@ -294,6 +309,14 @@ public actor Controller {
             let errors = Validation.check(new)
                 .filter { $0.severity == .error }
             guard errors.isEmpty else { throw .failed(errors.map(\.message).joined(separator: "; ")) }
+            // Its lists must be on disk: the helper cannot fetch them from
+            // behind the kill switch while switching over.
+            if let lists = options.ruleLists {
+                let local = await lists.local(RuleLists.urls(new))
+                if let missing = new.lists.first(where: { l in RuleLists.urls(new).contains(l.url) && local[l.url] == nil }) {
+                    throw .failed(SingBoxConfig.Failure.listMissing(missing.name).description)
+                }
+            }
         }
         guard phase == .connected || phase == .reconnecting || phase == .off else { throw .busy(phase) }
         let guarded = profile.protectionMode != .off || new.protectionMode != .off
@@ -520,8 +543,9 @@ public actor Controller {
         try PFRules.generate(.init(tunInterface: tun, singBoxGroup: options.singBoxGroup, lan: profile.lan))
     }
 
-    private func makeConfig() throws -> Data {
+    private func makeConfig(lists: [String: SingBoxConfig.LocalList]?) throws -> Data {
         var env = options.configEnvironment
+        if let lists { env.lists = lists }
         env.clashAPISecret = Secret.random()
         env.localDNS = localDNS
         if let logLevel { env.logLevel = logLevel }
@@ -604,12 +628,23 @@ public actor Controller {
         try Task.checkCancellation()
         guard epoch == my else { return }
 
+        // The profile's lists: fetched on a start while the network is
+        // still open (saving the profile fetched them already). Behind the
+        // kill switch the helper reaches nothing: what is on disk is used.
+        var localLists: [String: SingBoxConfig.LocalList]?
+        if let lists = options.ruleLists {
+            if !keepBlockingOnFailure { await lists.fetchMissing(profile) }
+            guard epoch == my else { return }
+            localLists = await lists.local(RuleLists.urls(profile))
+            guard epoch == my else { return }
+        }
+
         let config: Data
         let blocked: String
         localDNS = await network.prepareLocalDNS()
         guard epoch == my else { return }
         do {
-            config = try makeConfig()
+            config = try makeConfig(lists: localLists)
             blocked = try rules(tun: nil)
         } catch {
             throw CommandError.failed("\(error)")

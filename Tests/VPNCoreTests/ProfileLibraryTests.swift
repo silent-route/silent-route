@@ -89,6 +89,9 @@ import Testing
         #expect(p.routes[0].target == .servers([b]))
         #expect(!p.routes[0].killSwitch)
         #expect(p.routes[1].target == .direct)
+        // A country of the sing-box project's, as lists were named then.
+        #expect(p.routes[1].conditions.destinations == [.list("geoip-cn")])
+        #expect(p.lists == [RuleList(name: "geoip-cn", url: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs")])
         // And it saves as schema 2.
         let again = try JSONDecoder().decode(Profile.self, from: JSONEncoder().encode(p))
         #expect(again == p)

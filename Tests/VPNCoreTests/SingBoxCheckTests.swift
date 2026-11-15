@@ -115,7 +115,7 @@ struct SingBoxCheckTests {
                            proto: .proxy(Proxy(kind: .socks5, username: "u", password: "p")))
         let tunnels = [Fixtures.h2, Fixtures.vless, socks]
         let dests: [Destination] = [.cidr(IPNetwork("10.0.0.0/8")!), .cidr(IPNetwork("2001:db8::/32")!),
-                                    .domain("a.example"), .domainSuffix("b.example"), .domainKeyword("kw"), .geoIP("cn")]
+                                    .domain("a.example"), .domainSuffix("b.example"), .domainKeyword("kw"), .list("geoip-cn")]
         let apps: [AppMatcher] = [.bundle(path: "/Applications/Safari.app"), .executable(path: "/usr/bin/curl"),
                                   .processName("ssh")]
         let ids = tunnels.map(\.id)
@@ -176,9 +176,9 @@ enum SingBox {
     static let work: URL = {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("silentroute-check-\(getpid())")
         try? FileManager.default.createDirectory(at: dir.appendingPathComponent("rules"), withIntermediateDirectories: true)
-        for (name, rule) in [("geoip-cn", #"{"ip_cidr": ["203.0.113.0/24"]}"#),
-                             ("geosite-cn", #"{"domain_suffix": ["cn"]}"#),
-                             ("geosite-geolocation-cn", #"{"domain_suffix": ["gov.cn"]}"#)] {
+        let rules = [#"{"ip_cidr": ["203.0.113.0/24"]}"#, #"{"domain_suffix": ["cn"]}"#, #"{"domain_suffix": ["gov.cn"]}"#]
+        for (list, rule) in zip(Profile.domesticLists, rules) {
+            let name = RuleLists.fileKey(list.url)
             let src = dir.appendingPathComponent("\(name).json")
             try? #"{"version": 3, "rules": [\#(rule)]}"#.write(to: src, atomically: true, encoding: .utf8)
             _ = try? run(["rule-set", "compile", src.path, "-o", dir.appendingPathComponent("rules/\(name).srs").path])
@@ -188,7 +188,7 @@ enum SingBox {
 
     static var env: SingBoxConfig.Environment {
         var e = Fixtures.env
-        e.ruleSetDirectory = work.appendingPathComponent("rules").path
+        e.lists = Fixtures.lists(in: work.appendingPathComponent("rules").path)
         e.cacheFile = work.appendingPathComponent("cache.db").path
         return e
     }

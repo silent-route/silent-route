@@ -14,7 +14,7 @@ import VPNRuntime
 public enum IPC {
     /// Bumped on any incompatible change; the app asks to reinstall the
     /// helper on a mismatch.
-    public static let protocolVersion = 10
+    public static let protocolVersion = 11
     public static let machService = "org.silentroute.app.helper"
 
     /// Clients the helper accepts. Each must be signed by the same
@@ -43,6 +43,10 @@ public enum IPC {
         /// This user's sessions log every connection (sing-box at "info"),
         /// from their next session on.
         case setDetailedLogs(Bool)
+        /// The state of these lists (by address): size, date, last error.
+        case ruleLists([String])
+        /// Download these lists now, then answer as ruleLists.
+        case updateRuleLists([String])
     }
 
     public struct Envelope: Codable, Sendable {
@@ -74,6 +78,8 @@ public enum IPC {
         public var probe: Probe.Report?
         /// This user's sessions log every connection (see setDetailedLogs).
         public var detailedLogs: Bool?
+        /// Only for ruleLists and updateRuleLists.
+        public var ruleLists: [RuleListInfo]?
 
         public init(error: String? = nil, status: VPNStatus? = nil, activeProfile: ProfileRef? = nil,
                     libraryRevision: Int? = nil, library: ProfileLibrary? = nil, api: APICredentials? = nil,

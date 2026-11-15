@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.0-beta
+
+### Lists you add yourself
+
+- **No address or site lists are built in any more.** A profile's lists are added in **Network › Lists** by their web address (HTTPS): a sing-box rule-set (`.srs` or `.json`) or plain text with one site or address per line — v2fly (`domain:`, `full:`, `keyword:`) and Clash (`DOMAIN-SUFFIX,`, `IP-CIDR,`) styles are understood. A route uses one as `list:name`.
+- **Kept up to date by the helper.** A list is downloaded when the profile is saved or turned on, checked for a new version every day, and on **Update Now**; each list shows when it was updated, its size, and why the last download failed, if it did. A new version replaces the old one only after sing-box has read it whole, and a VPN that is on picks it up without reconnecting.
+- **Never half a profile.** A profile whose list could not be downloaded does not start, and a running VPN does not switch to it — with a message saying which list. What a list should catch never slips past its route.
+- Profiles that used `geoip:` and `geosite:` keep working: those become lists with the sing-box project's address they always came from.
+
+### Routes
+
+- **A route's apps and sites match on their own.** Everything the listed apps send, and every connection to the listed sites from any app, goes the route's way. Before, a route with both took only those apps' traffic to those sites, and other apps going there fell through to *Everything else*. Ports and a protocol still narrow both.
+- **Local network addresses** as a route condition: the router, printers, a NAS — every private and link-local address, on whatever network the Mac joins.
+- **A double-click edits** a route, a server or a list. A route's chain of servers wraps instead of scrolling sideways.
+
+### Window
+
+- Switching to another profile stays on the same page (Routes, Servers, DNS or Network).
+- Profile pages take the window's width.
+
 ## 1.4.4-beta
 
 Everything that changed since 1.0.1-beta.

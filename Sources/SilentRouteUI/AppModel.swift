@@ -24,7 +24,16 @@ extension HelperBackend {
 public struct XPCBackend: HelperBackend {
     let client = HelperClient()
     public init() {}
-    public func send(_ request: IPC.Request) async throws -> IPC.Response { try await client.send(request, timeout: 30) }
+    public func send(_ request: IPC.Request) async throws -> IPC.Response {
+        // Downloads (Update Now, a profile's new lists before it is saved)
+        // take as long as the network does; the helper gives up after two
+        // minutes.
+        let long = switch request {
+        case .updateRuleLists, .saveProfile: true
+        default: false
+        }
+        return try await client.send(request, timeout: long ? 150 : 30)
+    }
     public var isInstalled: Bool {
         FileManager.default.fileExists(atPath: "/Library/Application Support/Silent Route/bin/SilentRouteHelper")
     }
@@ -525,6 +534,14 @@ public final class AppModel {
         if let e = r.error { throw AppModelError(message: e) }
         guard let report = r.probe else { throw AppModelError(message: "the helper did not answer the check") }
         return report
+    }
+
+    /// The state of lists, by address; with `update`, after downloading
+    /// them now.
+    public func ruleLists(_ urls: [String], update: Bool = false) async throws -> [RuleListInfo] {
+        let r = try await backend.send(update ? .updateRuleLists(urls) : .ruleLists(urls))
+        if let e = r.error { throw AppModelError(message: e) }
+        return r.ruleLists ?? []
     }
 
     /// The network wants a login, and this user owns the VPN.

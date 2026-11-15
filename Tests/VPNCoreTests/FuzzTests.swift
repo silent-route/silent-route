@@ -83,7 +83,7 @@ import Testing
 
     @Test func ruleTextNeverCrashes() {
         var g = Seeded(state: 7)
-        let seeds = ["example.com", "=a.b.c", "keyword:tube", "geoip:cn", "geosite:geolocation-cn", "10.0.0.0/8",
+        let seeds = ["example.com", "=a.b.c", "keyword:tube", "list:geoip-cn", "list:a@b", "10.0.0.0/8",
                      "2001:db8::/32", "https://a.com/x", "443, 8000-8100", "::1", "1.2.3.4/33"]
         for _ in 0..<20_000 {
             let s = Self.mutate(seeds.randomElement(using: &g)!, &g)
@@ -148,7 +148,8 @@ import Testing
             if !p.routes.isEmpty {
                 let i = Int.random(in: 0..<p.routes.count, using: &g)
                 let v = odd.randomElement(using: &g)!
-                p.routes[i].conditions.destinations += [.domain(v), .domainSuffix(v), .domainKeyword(v), .geoIP(v), .geoSite(v)]
+                p.routes[i].conditions.destinations += [.domain(v), .domainSuffix(v), .domainKeyword(v), .list(v), .localNetwork]
+                p.lists.append(RuleList(name: v, url: odd.randomElement(using: &g)!))
                 p.routes[i].conditions.apps += [.processName(v), .executable(path: v), .bundle(path: v)]
                 p.routes[i].conditions.ports += [PortRange(0), PortRange(65535, 1)]
                 p.routes[i].name = v

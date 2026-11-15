@@ -44,35 +44,36 @@ enum Daemon {
         try? fm.removeItem(at: paths.migrateOwner)
         let version = (try? String(contentsOf: paths.version, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? "dev"
-        let countries = Set((try? fm.contentsOfDirectory(atPath: paths.rules.path))?.compactMap { name -> String? in
-            guard name.hasPrefix("geoip-"), name.hasSuffix(".srs") else { return nil }
-            return String(name.dropFirst(6).dropLast(4))
-        } ?? [])
-        let siteLists = Set((try? fm.contentsOfDirectory(atPath: paths.rules.path))?.compactMap { name -> String? in
-            guard name.hasPrefix("geosite-"), name.hasSuffix(".srs") else { return nil }
-            return String(name.dropFirst(8).dropLast(4))
-        } ?? [])
-        let env = SingBoxConfig.Environment(
-            ruleSetDirectory: paths.rules.path, cacheFile: paths.cache.path,
-            clashAPIPort: freePort(), clashAPISecret: "",
-            geoIPCountries: countries, siteLists: siteLists)
+        let env = SingBoxConfig.Environment(cacheFile: paths.cache.path, clashAPIPort: freePort(), clashAPISecret: "")
 
         // Session logs go into the home of whoever turned the VPN on. Earlier
         // builds kept a shared sing-box.log (readable by every user), root's
         // own session folders and the last session's owner there: all go.
         let sessionLog = SessionLog()
         Daemon.removeLegacyLogs(paths)
-        var options = Controller.Options(singBoxGroup: group, configEnvironment: env)
-        options.captivePort = freePort()
         let engine = SingBoxEngine(paths: paths, group: group, trampoline: paths.helper.path,
                                    output: { sessionLog.engineOutput() })
+        let lists = RuleListStore(dir: paths.rules, tool: { await engine.ruleSet($0) })
+        var options = Controller.Options(singBoxGroup: group, configEnvironment: env)
+        options.captivePort = freePort()
+        options.ruleLists = .init(local: { await lists.local($0) },
+                                  fetchMissing: { p in await lists.update(RuleLists.urls(p), olderThan: .infinity) })
         let controller = Controller(
             profile: Profile(), options: options,
             pf: SystemPacketFilter(), engine: engine, network: SystemNetwork(),
             store: FileStateStore(url: paths.state), clock: SystemClock())
         let profiles = ProfileManager(controller: controller, usersDir: paths.users, ownerFile: paths.owner)
         let service = Service(controller: controller, profiles: profiles, apiPort: env.clashAPIPort, version: version,
-                              sessionLog: sessionLog, engine: engine, paths: paths, group: group)
+                              sessionLog: sessionLog, engine: engine, paths: paths, group: group, lists: lists)
+
+        // Lists: every one on disk checked once a day.
+        Task {
+            await lists.removeLegacy()
+            while true {
+                await lists.refreshStale()
+                try? await Task.sleep(for: .seconds(3600))
+            }
+        }
 
         Task {
             // Before anything can begin a session.
@@ -230,10 +231,12 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
     let engine: SingBoxEngine
     let paths: Paths
     let group: UInt32
+    let lists: RuleListStore
     private let probes = Gate(limit: 3)
 
     init(controller: Controller, profiles: ProfileManager, apiPort: UInt16, version: String, sessionLog: SessionLog,
-         engine: SingBoxEngine, paths: Paths, group: UInt32) {
+         engine: SingBoxEngine, paths: Paths, group: UInt32, lists: RuleListStore) {
+        self.lists = lists
         self.sessionLog = sessionLog
         self.engine = engine
         self.paths = paths
@@ -301,6 +304,9 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
             case .getLibrary:
                 return await respond(uid, library: true)
             case .saveProfile(let p):
+                // Its new lists first: a running VPN applies the profile at
+                // once, and needs them on disk (fetched through it).
+                await lists.update(RuleLists.urls(p), olderThan: .infinity)
                 try await profiles.save(p, by: uid)
                 return await respond(uid, library: true)
             case .deleteProfile(let id):
@@ -331,6 +337,17 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 await probes.leave()
                 var r = await respond(uid)
                 r.probe = report
+                return r
+            case .ruleLists(let urls), .updateRuleLists(let urls):
+                // Any user may look, and ask for a refresh: a download of
+                // each web address given, at most.
+                let urls = Array(urls.filter(RuleLists.isValidURL).prefix(64))
+                if case .updateRuleLists = env.request {
+                    // Not again within a minute: Update Now twice is one download.
+                    await lists.update(urls, olderThan: 60)
+                }
+                var r = await respond(uid)
+                r.ruleLists = await lists.info(urls)
                 return r
             case .setDetailedLogs(let on):
                 await profiles.setDetailedLogs(on, by: uid)

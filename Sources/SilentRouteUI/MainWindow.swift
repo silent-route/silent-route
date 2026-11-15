@@ -14,6 +14,8 @@ public struct MainWindow: View {
     @State private var monitor = TrafficMonitor()
     @State private var settingsOpen = false
     @State private var windowVisible = true
+    /// The page of the profile shown, kept when another profile is chosen.
+    @SceneStorage("profileSection") private var profileSection: ProfileEditor.Section = .routes
 
     enum Item: Hashable {
         case monitor
@@ -209,7 +211,7 @@ public struct MainWindow: View {
                 LogsView(model: model)
             case .profile(let id):
                 if let p = model.library.profile(id) {
-                    ProfileEditor(model: model, saved: p).id(id)
+                    ProfileEditor(model: model, saved: p, section: $profileSection).id(id)
                 } else {
                     noSelection
                 }

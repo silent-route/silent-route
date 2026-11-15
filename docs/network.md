@@ -6,8 +6,8 @@ Everything Silent Route sends or lets through, by whom, where to, and when. It c
 
 | Component | Runs as | Talks to |
 |---|---|---|
-| **sing-box** | root, group `_silentroute` | Your servers, direct destinations, DNS servers, rule-set downloads. The only process the kill switch lets out. |
-| **Helper** | root | Only `127.0.0.1` (sing-box's control API). It also runs `curl` once in a while for the Wi-Fi login check, through sing-box. |
+| **sing-box** | root, group `_silentroute` | Your servers, direct destinations, DNS servers. The only process the kill switch lets out. |
+| **Helper** | root | `127.0.0.1` (sing-box's control API) and the addresses of your lists. It also runs `curl` once in a while for the Wi-Fi login check, through sing-box. |
 | **App** | you | `127.0.0.1` (live stats), GitHub (update checks), and a temporary sing-box when you press **Check** on a server. |
 | **Login window** | you | Only the Wi-Fi login proxy on `127.0.0.1`, while a network wants a login. |
 
@@ -21,7 +21,7 @@ Everything Silent Route sends or lets through, by whom, where to, and when. It c
 | Direct DNS | sing-box → the profile's direct resolver (default `1.1.1.1:53`, UDP) | Direct | Names of routes that go direct, *Always resolved directly* zones, and your servers' own host names |
 | Local names | sing-box → your router's DNS, as DHCP gives it | Direct, over the local network | Only names in the profile's local zones (default `lan`, `home.arpa`, `internal`), and only while the local network is reachable directly |
 | Server health checks | Helper → sing-box → each server in use → `www.gstatic.com/generate_204` (HTTP) | Through each server | Every 10 s while connected; every 2 s for a while after a network change. A server in use counts as down after two missed checks in a row, so one lost check moves or blocks nothing |
-| Address and site lists | sing-box → `raw.githubusercontent.com:443` (SagerNet rule-sets) | Direct | The first time a profile uses a list, then weekly; cached |
+| Your lists | Helper → each list's address (HTTPS only) | Direct while the VPN is off; through your routes while it is on, like any app | When a profile using it is saved or started and it is not on disk yet, then daily, and on **Update Now** |
 | Wi-Fi login check | Helper → `curl` → login proxy → `captive.apple.com:80` (HTTP) | Direct, with the router's DNS | Only while reconnecting behind the kill switch and no server answers |
 | Wi-Fi login page | Login window → login proxy → the network's login page | Direct, with the router's DNS | While a network wants a login and you have the window open |
 | Server **Check** | Helper → temporary sing-box (the kill switch's group, bound to the physical interface) → the server → `ipinfo.io:443` | Direct to the server, the way the VPN reaches it — also while the VPN is on, so the latency is the server's own | When you press Check |

@@ -32,8 +32,10 @@ let streaming = Route(name: "Streaming", conditions: Conditions(destinations: [.
                   target: .servers([lv.id, nl.id, de.id]), killSwitch: false)
 let home: Profile = {
     var p = Profile(name: "Home", tunnels: [nl, de, lv])
+    p.lists = [RuleList(name: "geoip-cn", url: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"),
+               RuleList(name: "blocked-sites", url: "https://example.org/lists/blocked-sites.txt")]
     p.routes = [
-        Route(name: "Domestic", conditions: Conditions(destinations: [.geoIP("cn"), .domainSuffix("cn")]), target: .direct),
+        Route(name: "Domestic", conditions: Conditions(destinations: [.list("geoip-cn"), .domainSuffix("cn")]), target: .direct),
         ai, streaming,
         Route(name: "Torrents", enabled: false,
               conditions: Conditions(apps: [.processName("transmission")], ports: [PortRange(6881, 6889)]), target: .direct),
@@ -211,6 +213,9 @@ MainActor.assumeIsolated {
         render("editor-\(section)", size: CGSize(width: 760, height: 640),
                ProfileEditor(model: model(.ready, connected), saved: home, section: section))
     }
+    // A wide window: the page takes its width.
+    render("editor-routes-wide", size: CGSize(width: 1200, height: 640),
+           ProfileEditor(model: model(.ready, connected), saved: home, section: .routes))
     render("editor-empty", size: CGSize(width: 760, height: 480), ProfileEditor(model: model(), saved: empty))
     render("window-not-installed", size: win, MainWindow(model: model(.notInstalled, VPNStatus(phase: .off), ProfileLibrary())))
     render("add-tunnel", AddServerSheet(draft: ServerDraft(de), isNew: false, profile: home) { _ in })
@@ -225,5 +230,11 @@ MainActor.assumeIsolated {
     var apple = streaming
     apple.conditions.apps = [.safari, .webKitNetworking]
     apple.target = .direct
+    var lan = streaming
+    lan.conditions.destinations = [.localNetwork, .domainSuffix("nas.example")]
+    render("route-editor-lan", RouteEditor(route: lan, profile: home, isNew: false, isDefault: false) { _ in })
+    var mixed = streaming
+    mixed.conditions.apps = [.bundle(path: "/Applications/Safari.app")]
+    render("route-editor-mixed", RouteEditor(route: mixed, profile: home, isNew: false, isDefault: false) { _ in })
     render("route-editor-apple", RouteEditor(route: apple, profile: home, isNew: false, isDefault: false) { _ in })
 }

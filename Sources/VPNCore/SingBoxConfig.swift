@@ -7,19 +7,15 @@ import Foundation
 /// Nothing in the profile can name a file.
 public enum SingBoxConfig {
     public struct Environment: Sendable {
-        /// Directory for rule-sets kept on disk (`geoip-<cc>.srs`,
-        /// `geosite-<name>.srs`). Absolute.
-        public var ruleSetDirectory: String
         /// sing-box cache file. Absolute.
         public var cacheFile: String
         public var clashAPIPort: UInt16
         /// Fresh random secret for every start; handed to the app over XPC.
         public var clashAPISecret: String
-        /// Countries with a `geoip-<cc>.srs` file on disk. Any other country
-        /// is downloaded by sing-box when first used, and cached.
-        public var geoIPCountries: Set<String>
-        /// Site lists with a `geosite-<name>.srs` file on disk; the same.
-        public var siteLists: Set<String>
+        /// The lists on disk, by address (`RuleList.url`). A profile using a
+        /// list that is not there is refused: nothing it should match may
+        /// slip past its route.
+        public var lists: [String: LocalList]
         public var logLevel: String
         /// The way out for a Wi-Fi login page: a SOCKS/HTTP proxy on
         /// localhost whose traffic goes directly, past the tunnel, with the
@@ -31,15 +27,26 @@ public enum SingBoxConfig {
         /// reachable even by queries it scopes to that interface.
         public var localDNS = false
 
-        public init(ruleSetDirectory: String, cacheFile: String, clashAPIPort: UInt16, clashAPISecret: String,
-                    geoIPCountries: Set<String>, siteLists: Set<String> = [], logLevel: String = "warn") {
-            self.ruleSetDirectory = ruleSetDirectory
+        public init(cacheFile: String, clashAPIPort: UInt16, clashAPISecret: String,
+                    lists: [String: LocalList] = [:], logLevel: String = "warn") {
             self.cacheFile = cacheFile
             self.clashAPIPort = clashAPIPort
             self.clashAPISecret = clashAPISecret
-            self.geoIPCountries = geoIPCountries
-            self.siteLists = siteLists
+            self.lists = lists
             self.logLevel = logLevel
+        }
+    }
+
+    /// A list as the helper keeps it: a compiled rule-set.
+    public struct LocalList: Codable, Hashable, Sendable {
+        /// Absolute.
+        public var path: String
+        /// It matches names, not only addresses: it also decides which DNS
+        /// server a name is asked of.
+        public var matchesNames: Bool
+        public init(path: String, matchesNames: Bool) {
+            self.path = path
+            self.matchesNames = matchesNames
         }
     }
 
@@ -68,12 +75,14 @@ public enum SingBoxConfig {
         case invalidProfile([String])
         case noTunnels
         case badEnvironment(String)
+        case listMissing(String)
 
         public var description: String {
             switch self {
             case .invalidProfile(let e): "The profile has errors: " + e.joined(separator: "; ")
             case .noTunnels: "The profile has no tunnels"
             case .badEnvironment(let s): "Internal error: \(s)"
+            case .listMissing(let n): "The list “\(n)” could not be downloaded yet — see Network › Lists"
             }
         }
     }
@@ -101,7 +110,7 @@ public enum SingBoxConfig {
     // MARK: - Full config
 
     public static func generate(_ profile: Profile, env: Environment) throws(Failure) -> JSON {
-        guard env.ruleSetDirectory.hasPrefix("/"), env.cacheFile.hasPrefix("/") else {
+        guard env.cacheFile.hasPrefix("/"), env.lists.values.allSatisfy({ $0.path.hasPrefix("/") }) else {
             throw .badEnvironment("paths must be absolute")
         }
         let errors = Validation.check(profile)
@@ -166,27 +175,13 @@ public enum SingBoxConfig {
             routeRules.append(["inbound": [.string(tunTag)], "action": "route", "outbound": .string(final), "tls_fragment": true])
         }
 
-        // Rule-sets actually referenced.
-        var ruleSetTags: [String] = []
-        for r in routes {
-            for d in r.conditions.destinations {
-                let t: String? = switch d {
-                case .geoIP(let cc): "geoip-\(cc)"
-                case .geoSite(let n): "geosite-\(n)"
-                default: nil
-                }
-                if let t, !ruleSetTags.contains(t) { ruleSetTags.append(t) }
+        // The lists actually referenced, each as its compiled file.
+        var ruleSets: [JSON] = []
+        for name in usedLists(routes) {
+            guard let url = profile.lists.first(where: { $0.name == name })?.url, let file = env.lists[url] else {
+                throw .listMissing(name)
             }
-        }
-        let dir = env.ruleSetDirectory.hasSuffix("/") ? String(env.ruleSetDirectory.dropLast()) : env.ruleSetDirectory
-        let ruleSets: [JSON] = ruleSetTags.map { tag in
-            let onDisk = tag.hasPrefix("geoip-") ? env.geoIPCountries.contains(String(tag.dropFirst(6)))
-                                                 : env.siteLists.contains(String(tag.dropFirst(8)))
-            if onDisk {
-                return ["type": "local", "tag": .string(tag), "format": "binary", "path": .string("\(dir)/\(tag).srs")]
-            }
-            return ["type": "remote", "tag": .string(tag), "format": "binary", "url": .string(ruleSetURL(tag)),
-                    "download_detour": .string(direct), "update_interval": "7d"]
+            ruleSets.append(["type": "local", "tag": .string(RuleLists.tag(name)), "format": "binary", "path": .string(file.path)])
         }
 
         var route: [String: JSON] = [
@@ -227,20 +222,19 @@ public enum SingBoxConfig {
         ]
     }
 
+    static func usedLists(_ routes: [Route]) -> [String] {
+        var out: [String] = []
+        for r in routes {
+            for case .list(let n) in r.conditions.destinations where !out.contains(n) { out.append(n) }
+        }
+        return out
+    }
+
     // MARK: - Server check config
 
     /// A config that only exposes one tunnel as a local SOCKS proxy: no TUN,
     /// no routes, no clash API, no cache file. Used to test a server while
     /// the real connection (or none) stays untouched.
-    /// The public rule-sets the sing-box project publishes. Downloaded by
-    /// each user's own sing-box, so Silent Route itself ships no address
-    /// or site data.
-    static func ruleSetURL(_ tag: String) -> String {
-        tag.hasPrefix("geoip-")
-            ? "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/\(tag).srs"
-            : "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/\(tag).srs"
-    }
-
     /// - Parameters:
     ///   - auth: a user name and password for the SOCKS port, so nothing else
     ///     on the Mac can use it while the check runs.
@@ -294,12 +288,17 @@ public enum SingBoxConfig {
             return t
         }
 
-        // Only routes whose condition is purely about the domain can be
-        // mirrored: a DNS query does not carry the app or port of the
-        // connection that will follow (it comes from mDNSResponder).
-        for r in routes where r.conditions.apps.isEmpty && r.conditions.ports.isEmpty && r.conditions.network == nil {
+        // A route's sites are mirrored unless ports or a protocol narrow
+        // them: a DNS query does not carry the port of the connection that
+        // will follow. Its apps do not matter — its sites match from any
+        // app (and the query comes from mDNSResponder anyway).
+        for r in routes where r.conditions.ports.isEmpty && r.conditions.network == nil {
             var domains = domainFields(r.conditions.destinations)
-            let sites = r.conditions.destinations.compactMap { if case .geoSite(let n) = $0 { "geosite-\(n)" } else { nil } }
+            let sites = r.conditions.destinations.compactMap { d -> String? in
+                guard case .list(let n) = d, let url = profile.lists.first(where: { $0.name == n })?.url,
+                      env.lists[url]?.matchesNames == true else { return nil }
+                return RuleLists.tag(n)
+            }
             if !sites.isEmpty { domains["rule_set"] = .strings(sites) }
             guard !domains.isEmpty else { continue }
             var rule = domains
@@ -341,7 +340,7 @@ public enum SingBoxConfig {
             case .domain(let s): exact.append(Validation.normalizeDomain(s))
             case .domainSuffix(let s): suffix.append(Validation.normalizeDomain(s))
             case .domainKeyword(let s): keyword.append(s.lowercased())
-            case .cidr, .geoIP, .geoSite: break
+            case .cidr, .list, .localNetwork: break
             }
         }
         var out: [String: JSON] = [:]
@@ -354,33 +353,33 @@ public enum SingBoxConfig {
     // MARK: - Route rules
 
     /// One profile rule as one sing-box rule. Each condition group becomes a
-    /// separate sub-rule; groups are AND-ed with an explicit logical rule, and
-    /// several kinds of destination inside a group are OR-ed with another, so
-    /// the meaning never depends on sing-box's implicit field grouping.
+    /// What it is about — its sites and addresses, its apps — each match on
+    /// its own (OR); ports and protocol narrow that down (AND). Explicit
+    /// logical rules, so the meaning never depends on sing-box's implicit
+    /// field grouping.
     static func routeRule(_ r: Route) -> JSON {
         var parts: [[String: JSON]] = []
         let c = r.conditions
 
+        var what: [[String: JSON]] = []
         if !c.destinations.isEmpty {
             var kinds: [[String: JSON]] = []
             let cidrs = c.destinations.compactMap { if case .cidr(let n) = $0 { n.description } else { nil } }
             if !cidrs.isEmpty { kinds.append(["ip_cidr": .strings(cidrs)]) }
-            let geo = c.destinations.compactMap { d -> String? in
-                switch d {
-                case .geoIP(let cc): "geoip-\(cc)"
-                case .geoSite(let n): "geosite-\(n)"
-                default: nil
-                }
-            }
+            if c.destinations.contains(.localNetwork) { kinds.append(["ip_is_private": true]) }
+            let geo = c.destinations.compactMap { if case .list(let n) = $0 { RuleLists.tag(n) } else { nil } }
             if !geo.isEmpty { kinds.append(["rule_set": .strings(geo)]) }
             for (k, v) in domainFields(c.destinations).sorted(by: { $0.key < $1.key }) { kinds.append([k: v]) }
-            parts.append(kinds.count == 1 ? kinds[0] : ["type": "logical", "mode": "or", "rules": .array(kinds.map(JSON.object))])
+            what += kinds
         }
         if !c.apps.isEmpty {
             // One field for every kind of app matcher: sing-box AND-s
             // process_name with process_path, which is not what a list of
             // apps means.
-            parts.append(["process_path_regex": .strings(c.apps.flatMap(appRegexes))])
+            what.append(["process_path_regex": .strings(c.apps.flatMap(appRegexes))])
+        }
+        if !what.isEmpty {
+            parts.append(what.count == 1 ? what[0] : ["type": "logical", "mode": "or", "rules": .array(what.map(JSON.object))])
         }
         if !c.ports.isEmpty {
             parts.append(["port_range": .strings(c.ports.map { "\($0.lower):\($0.upper)" })])

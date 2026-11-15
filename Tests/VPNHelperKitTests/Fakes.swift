@@ -218,7 +218,7 @@ struct Harness {
                             proto: .hysteria2(Hysteria2(password: "p", tls: TLS(serverName: "b.example.org"))))
 
     init(killSwitch: KillSwitchMode = .whileConnected, saved: PersistedState? = nil, boot: Date = Date(timeIntervalSince1970: 500_000),
-         captivePort: UInt16? = nil) {
+         captivePort: UInt16? = nil, ruleLists: Controller.RuleListHooks? = nil) {
         store = FakeStore(saved)
         clock = FakeClock(boot: boot)
         var profile = Profile.example(tunnels: [Self.h2, Self.h2b])
@@ -230,11 +230,13 @@ struct Harness {
         } else {
             profile.killSwitch = killSwitch
         }
-        let env = SingBoxConfig.Environment(ruleSetDirectory: "/tmp/rules", cacheFile: "/tmp/cache.db",
-                                            clashAPIPort: 19090, clashAPISecret: "", geoIPCountries: ["cn"],
-                                            siteLists: ["cn", "geolocation-cn"])
+        let env = SingBoxConfig.Environment(cacheFile: "/tmp/cache.db", clashAPIPort: 19090, clashAPISecret: "",
+                                            lists: Dictionary(uniqueKeysWithValues: Profile.domesticLists.map {
+                                                ($0.url, .init(path: "/tmp/rules/\($0.name).srs", matchesNames: false))
+                                            }))
         var options = Controller.Options(singBoxGroup: 4242, configEnvironment: env)
         options.captivePort = captivePort
+        options.ruleLists = ruleLists
         controller = Controller(profile: profile, options: options,
                                 pf: FakePF(world: world), engine: FakeEngine(world: world),
                                 network: FakeNetwork(world: world), store: store, clock: clock)

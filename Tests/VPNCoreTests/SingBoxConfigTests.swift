@@ -21,10 +21,16 @@ enum Fixtures {
                                      reality: .init(publicKey: "ZcUXAS9Ch2aP6IAJBcrLFmdPtjQxAm1sWaA2hvpWtXc", shortID: "ab12")))))
 
     static let env = SingBoxConfig.Environment(
-        ruleSetDirectory: "/Library/Application Support/Silent Route/rules",
         cacheFile: "/Library/Application Support/Silent Route/run/cache.db",
-        clashAPIPort: 19090, clashAPISecret: "SECRET",
-        geoIPCountries: ["cn"], siteLists: ["cn", "geolocation-cn"])
+        clashAPIPort: 19090, clashAPISecret: "SECRET", lists: lists(in: "/Library/Application Support/Silent Route/rules"))
+
+    /// The example's lists, as the helper keeps them in `dir`: the site
+    /// lists match names, the country's addresses do not.
+    static func lists(in dir: String) -> [String: SingBoxConfig.LocalList] {
+        Dictionary(uniqueKeysWithValues: Profile.domesticLists.map {
+            ($0.url, .init(path: "\(dir)/\(RuleLists.fileKey($0.url)).srs", matchesNames: $0.name.hasPrefix("geosite-")))
+        })
+    }
 
     static let defaultRouteID = UUID(uuidString: "00000000-0000-0000-0000-0000000000d0")!
     static let telegramID = UUID(uuidString: "00000000-0000-0000-0000-0000000000c1")!
@@ -54,19 +60,17 @@ enum Fixtures {
 }
 
 @Suite struct SingBoxConfigTests {
-    /// A list not on disk is downloaded by sing-box (through no server, so
-    /// a dead tunnel cannot keep it from starting); one on disk is used as is.
-    @Test func ruleSetsNotOnDiskAreDownloaded() throws {
+    /// Lists are read from the helper's files; a list it has not got is
+    /// refused rather than left out (what it should catch would slip past).
+    @Test func listsComeFromDisk() throws {
         var p = Fixtures.profile
-        p.routes[0].conditions.destinations += [.geoIP("de"), .geoSite("netflix")]
-        let json = try SingBoxConfig.generate(p, env: Fixtures.env)
-        let sets = try #require(json["route"]?["rule_set"]?.arrayValue)
-        func set(_ tag: String) -> JSON? { sets.first { $0["tag"]?.stringValue == tag } }
-        #expect(set("geoip-cn")?["type"]?.stringValue == "local")
-        #expect(set("geoip-de")?["type"]?.stringValue == "remote")
-        #expect(set("geoip-de")?["url"]?.stringValue == "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-de.srs")
-        #expect(set("geoip-de")?["download_detour"]?.stringValue == "direct")
-        #expect(set("geosite-netflix")?["url"]?.stringValue == "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-netflix.srs")
+        let sets = try #require(try SingBoxConfig.generate(p, env: Fixtures.env)["route"]?["rule_set"]?.arrayValue)
+        let cn = try #require(sets.first { $0["tag"]?.stringValue == "list-geoip-cn" })
+        #expect(cn["type"] == "local" && cn["format"] == "binary")
+        #expect(cn["path"]?.stringValue == Fixtures.env.lists[Profile.domesticLists[0].url]?.path)
+        p.lists.append(RuleList(name: "more", url: "https://example.org/more.txt"))
+        p.routes[0].conditions.destinations.append(.list("more"))
+        #expect(throws: SingBoxConfig.Failure.listMissing("more")) { try SingBoxConfig.generate(p, env: Fixtures.env) }
     }
 
     /// Local names go to the router only while the local network is
@@ -110,10 +114,14 @@ enum Fixtures {
 
     @Test func geoNamesAreCheckedForForm() {
         var p = Fixtures.profile
-        p.routes[0].conditions.destinations = [.geoIP("deu"), .geoSite("bad name")]
+        p.routes[0].conditions.destinations = [.list("nowhere")]
+        p.lists += [RuleList(name: "Bad Name", url: "https://a.example/x"), RuleList(name: "plain", url: "http://a.example/x"),
+                    RuleList(name: "plain", url: "https://a.example/y")]
         let errors = Validation.check(p).filter { $0.severity == .error }.map(\.message)
-        #expect(errors.contains { $0.contains("bad country code") })
-        #expect(errors.contains { $0.contains("bad site list name") })
+        #expect(errors.contains { $0.contains("\"nowhere\", which is not in the profile's lists") })
+        #expect(errors.contains { $0.contains("bad list name") })
+        #expect(errors.contains { $0.contains("must be an https://") })
+        #expect(errors.contains { $0.contains("two lists are named") })
     }
 
     static let goldenDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("golden")
@@ -148,7 +156,7 @@ enum Fixtures {
         // Domestic: lists (geoip + geosite) OR the domain zones.
         #expect(rules[3]["mode"] == "or")
         guard case .array(let dom)? = rules[3]["rules"] else { Issue.record("Domestic is not logical"); return }
-        #expect(dom.contains { $0["rule_set"] == ["geoip-cn", "geosite-cn", "geosite-geolocation-cn"] })
+        #expect(dom.contains { $0["rule_set"] == ["list-geoip-cn", "list-geosite-cn", "list-geosite-geolocation-cn"] })
         #expect(dom.contains { $0["domain_suffix"] == ["cn", "xn--fiqs8s"] })
         #expect(rules[3]["outbound"] == "direct")
         // Telegram goes through servers: its pings are refused first — the
@@ -182,7 +190,9 @@ enum Fixtures {
         // direct resolver, "Work" → direct, "Ads" → rejected, then the defaults.
         #expect(rules[0]["domain_suffix"] == ["lan", "home.arpa", "internal"])
         #expect(rules[0]["server"] == "dns-local")
-        #expect(rules[1]["rule_set"] == ["geosite-cn", "geosite-geolocation-cn"])
+        // Only the lists that match names: an address list says nothing
+        // about a name before it is looked up.
+        #expect(rules[1]["rule_set"] == ["list-geosite-cn", "list-geosite-geolocation-cn"])
         #expect(rules[1]["server"] == "dns-direct")
         #expect(rules[2]["domain_suffix"] == ["corp.example"])
         #expect(rules[2]["server"] == "dns-direct")
@@ -193,11 +203,11 @@ enum Fixtures {
 
     @Test func refusesInvalidProfiles() {
         var p = Fixtures.profile
-        p.routes.append(Route(name: "ghost", conditions: Conditions(destinations: [.geoIP("de")]), target: .servers([UUID()])))
+        p.routes.append(Route(name: "ghost", conditions: Conditions(destinations: [.list("geoip-cn")]), target: .servers([UUID()])))
         #expect(throws: SingBoxConfig.Failure.self) { try SingBoxConfig.generate(p, env: Fixtures.env) }
 
         var rel = Fixtures.env
-        rel.ruleSetDirectory = "rules"     // relative paths would resolve against the cwd
+        rel.lists = Fixtures.lists(in: "rules")     // relative paths would resolve against the cwd
         #expect(throws: SingBoxConfig.Failure.badEnvironment("paths must be absolute")) {
             try SingBoxConfig.generate(Fixtures.profile, env: rel)
         }
@@ -254,7 +264,7 @@ enum Fixtures {
         p.tunnels = [Fixtures.h2]
         p.defaultRoute.target = .servers([Fixtures.h2ID])
         let text = try SingBoxConfig.generate(p, env: Fixtures.env).text
-        for word in ["geoip", "geosite", "223.5.5.5", "\"cn\"", "xn--fiqs8s", "rule_set"] {
+        for word in ["geoip", "geosite", "list-", "223.5.5.5", "\"cn\"", "xn--fiqs8s", "rule_set"] {
             #expect(!text.contains(word), "a blank profile's config contains \(word)")
         }
     }

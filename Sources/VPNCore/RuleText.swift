@@ -15,8 +15,7 @@ public enum RuleText {
     ///   =example.com           exactly this name
     ///   *.example.com, .example.com   same as example.com
     ///   keyword:tube           any domain containing "tube"
-    ///   geoip:cn               addresses of a country
-    ///   geosite:geolocation-cn a named list of sites
+    ///   list:blocked-sites        one of the profile's lists
     ///   10.0.0.0/8, 1.2.3.4, 2001:db8::/32   addresses
     public static func destinations(_ text: String) -> (values: [Destination], errors: [LineError]) {
         var out: [Destination] = []
@@ -36,19 +35,10 @@ public enum RuleText {
 
     static func destination(_ s: String) -> Result<Destination, Reason> {
         let lower = s.lowercased()
-        if lower.hasPrefix("geoip:") {
-            let cc = String(lower.dropFirst(6))
-            guard cc.count == 2, cc.allSatisfy({ $0.isASCII && $0.isLetter }) else {
-                return .failure(Reason(reason: "a country is two letters, like geoip:cn"))
-            }
-            return .success(.geoIP(cc))
-        }
-        if lower.hasPrefix("geosite:") {
-            let name = String(lower.dropFirst(8))
-            guard !name.isEmpty, name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else {
-                return .failure(Reason(reason: "a site list is letters, digits and “-”, like geosite:geolocation-cn"))
-            }
-            return .success(.geoSite(name))
+        if lower.hasPrefix("list:") {
+            let name = String(lower.dropFirst(5))
+            guard RuleLists.isValidName(name) else { return .failure(Reason(reason: "a list name is letters, digits and “-”, like list:blocked-sites")) }
+            return .success(.list(name))
         }
         if lower.hasPrefix("keyword:") {
             let k = String(lower.dropFirst(8))
@@ -85,8 +75,8 @@ public enum RuleText {
         case .domainSuffix(let s): s
         case .domain(let s): "=" + s
         case .domainKeyword(let k): "keyword:" + k
-        case .geoIP(let c): "geoip:" + c
-        case .geoSite(let n): "geosite:" + n
+        case .list(let n): "list:" + n
+        case .localNetwork: "local network"
         }
     }
 

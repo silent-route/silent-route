@@ -140,3 +140,50 @@ extension Tunnel {
     var kindSymbol: String { proto.isProxy ? "arrow.left.arrow.right.circle" : "lock.circle" }
     var address: String { "\(server.host):\(String(server.port))" }
 }
+
+/// Children in a row, wrapping onto the next line when the row is full —
+/// like words in a paragraph.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for i in row.items {
+                let size = subviews[i].sizeThatFits(.unspecified)
+                subviews[i].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private struct Row { var items: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for (i, v) in subviews.enumerated() {
+            let size = v.sizeThatFits(.unspecified)
+            let needed = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.items.isEmpty, needed > width {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.items.append(i)
+        }
+        if !row.items.isEmpty { rows.append(row) }
+        return rows
+    }
+}

@@ -32,12 +32,16 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
     /// The tunnel interface's MTU; nil lets sing-box choose (9000). Lower it
     /// (1400, 1280) on networks where large packets get lost.
     public var mtu: Int?
+    /// Lists of sites or addresses, by name; routes use them as
+    /// `list:<name>`.
+    public var lists: [RuleList] = []
 
     public static let mtuRange = 1280...9000
 
     public init(schemaVersion: Int = Profile.currentSchema, id: UUID = UUID(), name: String = "Profile",
                 tunnels: [Tunnel] = [], routes: [Route] = [], defaultRoute: Route? = nil,
-                dns: DNSSettings = .default, lan: LANPolicy = .allow, killSwitch: KillSwitchMode = .whileConnected) {
+                dns: DNSSettings = .default, lan: LANPolicy = .allow, killSwitch: KillSwitchMode = .whileConnected,
+                lists: [RuleList] = []) {
         self.schemaVersion = schemaVersion
         self.id = id
         self.name = name
@@ -47,10 +51,11 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
         self.dns = dns
         self.lan = lan
         self.killSwitch = killSwitch
+        self.lists = lists
     }
 
     enum CodingKeys: String, CodingKey {
-        case schemaVersion, id, name, tunnels, routes, defaultRoute, dns, lan, killSwitch, mtu
+        case schemaVersion, id, name, tunnels, routes, defaultRoute, dns, lan, killSwitch, mtu, lists
         // schema 1
         case mainTunnel, rules
     }
@@ -66,6 +71,7 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
         lan = try c.decode(LANPolicy.self, forKey: .lan)
         killSwitch = try c.decode(KillSwitchMode.self, forKey: .killSwitch)
         mtu = try c.decodeIfPresent(Int.self, forKey: .mtu)
+        lists = try c.decodeIfPresent([RuleList].self, forKey: .lists) ?? []
         if schemaVersion >= 2 {
             routes = try c.decode([Route].self, forKey: .routes)
             defaultRoute = try c.decode(Route.self, forKey: .defaultRoute)
@@ -102,6 +108,25 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
             schemaVersion = Profile.currentSchema
             if killSwitch == .off { killSwitch = .whileConnected }
         }
+        // Read again for what earlier versions wrote: lists of the sing-box
+        // project named `geoip:`/`geosite:`.
+        let old = (try? c.decodeIfPresent([LegacyListUse].self, forKey: .routes)) ?? nil
+        let older = (try? c.decodeIfPresent([LegacyListUse].self, forKey: .rules)) ?? nil
+        adoptLegacyLists(Set(((old ?? []) + (older ?? [])).flatMap(\.names)))
+    }
+
+    /// Before lists were added by hand, `geoip:cn` and `geosite:…` named the
+    /// sing-box project's rule-sets (they read back as `list:geoip-cn`):
+    /// those lists are added with the address they always came from.
+    private mutating func adoptLegacyLists(_ names: Set<String>) {
+        let legacy = [("geoip-", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/"),
+                      ("geosite-", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/")]
+        for r in routes {
+            for case .list(let n) in r.conditions.destinations where !lists.contains(where: { $0.name == n }) {
+                guard names.contains(n), let (_, base) = legacy.first(where: { n.hasPrefix($0.0) }) else { continue }
+                lists.append(RuleList(name: n, url: base + n + ".srs"))
+            }
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -116,6 +141,37 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
         try c.encode(lan, forKey: .lan)
         try c.encode(killSwitch, forKey: .killSwitch)
         try c.encodeIfPresent(mtu, forKey: .mtu)
+        if !lists.isEmpty { try c.encode(lists, forKey: .lists) }
+    }
+
+    /// A route as earlier versions wrote it, for its `geoIP` and
+    /// `geoSite` destinations alone.
+    struct LegacyListUse: Decodable {
+        var names: [String]
+
+        private struct Key: CodingKey {
+            var stringValue: String
+            var intValue: Int? { nil }
+            init(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+
+        init(from decoder: Decoder) throws {
+            names = []
+            guard let route = try? decoder.container(keyedBy: Key.self),
+                  let conditions = try? route.nestedContainer(keyedBy: Key.self, forKey: Key(stringValue: "conditions")),
+                  var list = try? conditions.nestedUnkeyedContainer(forKey: Key(stringValue: "destinations")) else { return }
+            while !list.isAtEnd {
+                // Each one is an object; anything else ends the look.
+                guard let d = try? list.nestedContainer(keyedBy: Key.self) else { break }
+                for (key, prefix) in [("geoIP", "geoip-"), ("geoSite", "geosite-")] {
+                    if let v = try? d.nestedContainer(keyedBy: Key.self, forKey: Key(stringValue: key)),
+                       let n = try? v.decode(String.self, forKey: Key(stringValue: "_0")) {
+                        names.append(prefix + n)
+                    }
+                }
+            }
+        }
     }
 
     struct LegacyTunnel: Decodable {
@@ -139,7 +195,7 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
     public static func example(name: String = "Profile", tunnels: [Tunnel] = []) -> Profile {
         Profile(name: name, tunnels: tunnels, routes: [
             Route(name: "Domestic", conditions: Conditions(destinations: domestic), target: .direct),
-        ], dns: .exampleSplit)
+        ], dns: .exampleSplit, lists: domesticLists)
     }
 
     /// A new profile: no routes, nothing built in, and "Everything else"
@@ -153,8 +209,16 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
 
     /// The example's segment: addresses, site lists and domain zones.
     public static let domestic: [Destination] = [
-        .geoIP("cn"), .geoSite("cn"), .geoSite("geolocation-cn"),
+        .list("geoip-cn"), .list("geosite-cn"), .list("geosite-geolocation-cn"),
         .domainSuffix("cn"), .domainSuffix("xn--fiqs8s"),
+    ]
+
+    /// The example's lists: the sing-box project's.
+    public static let domesticLists = [
+        RuleList(name: "geoip-cn", url: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"),
+        RuleList(name: "geosite-cn", url: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs"),
+        RuleList(name: "geosite-geolocation-cn",
+                 url: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs"),
     ]
 
     public func tunnel(_ id: Tunnel.ID) -> Tunnel? { tunnels.first { $0.id == id } }
@@ -590,17 +654,52 @@ public struct Conditions: Codable, Hashable, Sendable {
     public var isEmpty: Bool { destinations.isEmpty && apps.isEmpty && ports.isEmpty && network == nil }
 }
 
-public enum Destination: Codable, Hashable, Sendable {
+public enum Destination: Hashable, Sendable {
     case cidr(IPNetwork)
     /// The domain and all its subdomains.
     case domainSuffix(String)
     /// Exactly this name.
     case domain(String)
     case domainKeyword(String)
-    /// ISO 3166 country code, lowercase ("cn"). Needs a geoip rule-set.
-    case geoIP(String)
-    /// A named domain list ("geolocation-cn"). Needs a geosite rule-set.
-    case geoSite(String)
+    /// One of the profile's lists, by name (`Profile.lists`).
+    case list(String)
+    /// Addresses of local networks — 10.0.0.0/8, 172.16.0.0/12,
+    /// 192.168.0.0/16, link-local and the like — wherever the Mac is.
+    case localNetwork
+}
+
+extension Destination: Codable {
+    /// As stored, including what earlier versions wrote.
+    private enum Stored: Codable {
+        case cidr(IPNetwork), domainSuffix(String), domain(String), domainKeyword(String), list(String), localNetwork
+        /// Before lists: a country's addresses, and a named site list.
+        case geoIP(String), geoSite(String)
+    }
+
+    public init(from decoder: Decoder) throws {
+        self = switch try Stored(from: decoder) {
+        case .cidr(let n): .cidr(n)
+        case .domainSuffix(let s): .domainSuffix(s)
+        case .domain(let s): .domain(s)
+        case .domainKeyword(let s): .domainKeyword(s)
+        case .list(let n): .list(n)
+        case .localNetwork: .localNetwork
+        case .geoIP(let n): .list("geoip-" + n)
+        case .geoSite(let n): .list("geosite-" + n)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let s: Stored = switch self {
+        case .cidr(let n): .cidr(n)
+        case .domainSuffix(let v): .domainSuffix(v)
+        case .domain(let v): .domain(v)
+        case .domainKeyword(let v): .domainKeyword(v)
+        case .list(let n): .list(n)
+        case .localNetwork: .localNetwork
+        }
+        try s.encode(to: encoder)
+    }
 }
 
 public enum AppMatcher: Codable, Hashable, Sendable {

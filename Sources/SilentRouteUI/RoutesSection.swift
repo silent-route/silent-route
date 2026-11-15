@@ -180,29 +180,30 @@ struct PathView: View {
     let liveServers: [ServerState]
     let live: RouteState?
 
+    // Wraps instead of scrolling sideways: a scroll view would take the
+    // card's clicks (its double-click opens the editor), and a long chain
+    // stays readable at any width.
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                switch route.target {
-                case .direct:
-                    terminal(direct: true, active: live != nil, label: "Direct, without VPN")
-                case .block:
-                    terminal(direct: false, active: live != nil, label: "Block")
-                case .servers:
-                    let chain = profile.chain(of: route)
-                    ForEach(Array(chain.enumerated()), id: \.element) { i, id in
-                        if i > 0 { arrow }
-                        node(id, carrying: live?.via == .server(id))
-                    }
-                    if chain.isEmpty { Text("No servers").foregroundStyle(.red) }
-                    arrow
-                    terminal(direct: !route.killSwitch,
-                             active: live?.via == .blocked || live?.via == .direct,
-                             label: route.killSwitch ? "Block" : "Direct")
+        FlowLayout(spacing: 6, lineSpacing: 6) {
+            switch route.target {
+            case .direct:
+                terminal(direct: true, active: live != nil, label: "Direct, without VPN")
+            case .block:
+                terminal(direct: false, active: live != nil, label: "Block")
+            case .servers:
+                let chain = profile.chain(of: route)
+                ForEach(Array(chain.enumerated()), id: \.element) { i, id in
+                    if i > 0 { arrow }
+                    node(id, carrying: live?.via == .server(id))
                 }
+                if chain.isEmpty { Text("No servers").foregroundStyle(.red) }
+                arrow
+                terminal(direct: !route.killSwitch,
+                         active: live?.via == .blocked || live?.via == .direct,
+                         label: route.killSwitch ? "Block" : "Direct")
             }
-            .padding(.vertical, 2)
         }
+        .padding(.vertical, 2)
     }
 
     private var arrow: some View {
@@ -272,6 +273,7 @@ struct RouteEditor: View {
     @State private var destinations = ""
     @State private var ports = ""
     @State private var processName = ""
+    @State private var localNetwork = false
 
     enum Kind: String, CaseIterable, Identifiable {
         case servers = "Through servers", direct = "Direct", block = "Block"
@@ -284,7 +286,8 @@ struct RouteEditor: View {
         self.isNew = isNew
         self.isDefault = isDefault
         self.done = done
-        _destinations = State(initialValue: RuleText.text(route.conditions.destinations))
+        _destinations = State(initialValue: RuleText.text(route.conditions.destinations.filter { $0 != .localNetwork }))
+        _localNetwork = State(initialValue: route.conditions.destinations.contains(.localNetwork))
         _ports = State(initialValue: RuleText.text(route.conditions.ports))
     }
 
@@ -294,7 +297,7 @@ struct RouteEditor: View {
     private var result: Route {
         var r = route
         if !isDefault {
-            r.conditions.destinations = parsedDest.values
+            r.conditions.destinations = parsedDest.values + (localNetwork ? [.localNetwork] : [])
             r.conditions.ports = parsedPorts.values
         }
         return r
@@ -362,7 +365,7 @@ struct RouteEditor: View {
                     }
 
                     if !isDefault {
-                        section("Sites and Addresses", hint: "One per line: youtube.com (with subdomains), =exact.example.com, keyword:tube, geoip:cn (a country), geosite:geolocation-cn (a site list), 10.0.0.0/8, 1.2.3.4") {
+                        section("Sites and Addresses", hint: "One per line: youtube.com (with subdomains), =exact.example.com, keyword:tube, list:blocked-sites (one of the profile's lists, in Network), 10.0.0.0/8, 1.2.3.4") {
                             TextEditor(text: $destinations)
                                 .font(.body.monospaced())
                                 .frame(minHeight: 100)
@@ -370,6 +373,7 @@ struct RouteEditor: View {
                                 .padding(6)
                                 .background(.background.opacity(0.7), in: .rect(cornerRadius: 8))
                                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+                            localNetworkToggle.padding(.top, 4)
                         }
                         section("Apps", hint: "Everything these programs send, including their helper processes") { apps }
                         section("Ports and Protocol") {
@@ -384,8 +388,9 @@ struct RouteEditor: View {
                                 .fixedSize()
                             }
                         }
-                        Text("A connection belongs to this route when it matches every kind of condition given; within one kind, any listed value matches.")
+                        Text("The route takes everything these apps send, and every connection to these sites and addresses, from any app. Ports and a protocol, if given, narrow both to them.")
                             .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(20)
@@ -476,6 +481,28 @@ struct RouteEditor: View {
     }
 
     // MARK: Pieces
+
+    /// Every local network at once, wherever the Mac is: no list of
+    /// addresses to keep.
+    private var localNetworkToggle: some View {
+        Toggle(isOn: $localNetwork) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: "network").frame(width: 18, height: 18).foregroundStyle(.secondary)
+                    Text("Local network addresses")
+                }
+                Text("The router, printers, a NAS, other computers nearby: 192.168.x.x, 10.x.x.x, 172.16–31.x.x and other private and link-local addresses, on whatever network the Mac joins.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if localNetwork, profile.lan == .allow {
+                    Label("While Local Network is “Reachable directly” (Network), these addresses go directly before any route is checked.",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
 
     private func section<C: View>(_ title: String, hint: String? = nil, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {

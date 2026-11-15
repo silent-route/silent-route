@@ -7,7 +7,9 @@ struct ProfileEditor: View {
     let model: AppModel
     let saved: Profile
     @State private var draft: Profile
-    @State private var section: Section = .routes
+    /// The page shown: the window's, so that switching to another profile
+    /// stays on the same page (DNS stays DNS).
+    @Binding var section: Section
     @State private var saveError: String?
 
     enum Section: String, CaseIterable, Identifiable {
@@ -15,11 +17,16 @@ struct ProfileEditor: View {
         var id: Self { self }
     }
 
-    init(model: AppModel, saved: Profile, section: Section = .routes) {
+    init(model: AppModel, saved: Profile, section: Binding<Section>) {
         self.model = model
         self.saved = saved
         _draft = State(initialValue: saved)
-        _section = State(initialValue: section)
+        _section = section
+    }
+
+    /// On a page of its own (snapshots).
+    init(model: AppModel, saved: Profile, section: Section = .routes) {
+        self.init(model: model, saved: saved, section: .constant(section))
     }
 
     private var dirty: Bool { draft != saved }
@@ -30,6 +37,12 @@ struct ProfileEditor: View {
         guard model.helper == .ready else { return nil }
         let model = self.model
         return { t in try await model.probe(t) }
+    }
+    /// The profile's lists, as the helper keeps them; nil without a helper.
+    private var helperLists: RuleListsCard.Lookup? {
+        guard model.helper == .ready else { return nil }
+        let model = self.model
+        return { urls, update in try await model.ruleLists(urls, update: update) }
     }
     private var isActive: Bool { saved.id == model.library.activeID }
     private var issues: [Validation.Issue] { Validation.check(draft) }
@@ -48,13 +61,14 @@ struct ProfileEditor: View {
                                                     liveRoutes: running ? model.status.routes : [])
                         case .servers: ServersSection(check: helperCheck, profile: $draft, live: running ? model.status.servers : [])
                         case .dns: DNSSection(dns: $draft.dns)
-                        case .network: NetworkSection(profile: $draft)
+                        case .network: NetworkSection(profile: $draft, lists: helperLists)
                         }
                     }
                 }
+                // The width of the window, as in System Settings and Mail:
+                // a page never sits in a narrow column in a wide window.
                 .padding(20)
-                .frame(maxWidth: 780, alignment: .leading)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .onChange(of: saved) { old, new in
@@ -271,9 +285,11 @@ struct DNSSection: View {
 
 struct NetworkSection: View {
     @Binding var profile: Profile
+    var lists: RuleListsCard.Lookup? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            RuleListsCard(profile: $profile, lookup: lists)
             Card(title: "Local Network", subtitle: "Printers, the router, AirDrop, a NAS, other computers at home or in the office.") {
                 Picker("", selection: $profile.lan) {
                     Text("Reachable directly").tag(LANPolicy.allow)
@@ -360,5 +376,181 @@ struct MTUPicker: View {
         .onAppear {
             if let m = mtu, !Self.presets.contains(m) { custom = true; text = String(m) }
         }
+    }
+}
+
+/// The profile's lists of sites or addresses: added by their web
+/// address, kept up to date by the helper.
+struct RuleListsCard: View {
+    typealias Lookup = @Sendable ([String], Bool) async throws -> [RuleListInfo]
+    @Binding var profile: Profile
+    let lookup: Lookup?
+    @State private var infos: [RuleListInfo] = []
+    @State private var updating = false
+    @State private var failure: String?
+    @State private var editing: EditRequest?
+
+    struct EditRequest: Identifiable {
+        var id = UUID()
+        var list: RuleList?
+    }
+
+    var body: some View {
+        Card(title: "Lists",
+             subtitle: "Lists of sites or addresses that someone keeps up to date, added by their web address: a sing-box rule-set (.srs or .json) or plain text, one site or address per line. Use one in a route as list:name. Checked for a new version every day; a VPN that is on picks it up without reconnecting.") {
+            if !profile.lists.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(profile.lists.enumerated()), id: \.element.id) { i, l in
+                        row(l, infos.first { $0.url == l.url })
+                        if i < profile.lists.count - 1 { Divider() }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .background(.background.opacity(0.6), in: .rect(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+            }
+            HStack(spacing: 10) {
+                Button { editing = EditRequest() } label: { Label("Add List…", systemImage: "plus") }
+                if !profile.lists.isEmpty {
+                    Button("Update Now") { Task { await load(update: true) } }
+                        .disabled(lookup == nil || updating)
+                        .help("Download the latest version of each list now")
+                }
+                if updating { ProgressView().controlSize(.small) }
+                if let failure {
+                    Label(failure, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+                }
+            }
+        }
+        .task(id: profile.lists.map(\.url)) { await load(update: false) }
+        .sheet(item: $editing) { req in
+            RuleListEditor(list: req.list, taken: Set(profile.lists.map(\.name)).subtracting([req.list?.name].compactMap { $0 })) { result in
+                if let result { save(result, replacing: req.list) }
+                editing = nil
+            }
+        }
+    }
+
+    private func row(_ l: RuleList, _ info: RuleListInfo?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("list:" + l.name).font(.body.monospaced())
+                Text(l.url).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer(minLength: 12)
+            VStack(alignment: .trailing, spacing: 1) {
+                if let updated = info?.updated {
+                    Text(Self.updated(updated, bytes: info?.bytes)).foregroundStyle(.secondary)
+                } else if info?.error == nil {
+                    Text("Downloaded when saved").foregroundStyle(.secondary)
+                }
+                if let e = info?.error {
+                    Text(Text.sentence(e)).foregroundStyle(info?.updated == nil ? .red : .orange)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(.caption)
+            Menu {
+                Button("Edit…") { editing = EditRequest(list: l) }
+                Button("Copy Address") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(l.url, forType: .string)
+                }
+                Divider()
+                Button("Delete", role: .destructive) { profile.lists.removeAll { $0.name == l.name } }
+            } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { editing = EditRequest(list: l) }
+    }
+
+    /// "Updated 3 hours ago · 52 KB".
+    static func updated(_ date: Date, bytes: Int?) -> String {
+        var s = "Updated " + date.formatted(.relative(presentation: .named))
+        if let bytes { s += " · " + ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file) }
+        return s
+    }
+
+    /// A renamed list is renamed in the routes too.
+    private func save(_ l: RuleList, replacing old: RuleList?) {
+        guard let old, let i = profile.lists.firstIndex(of: old) else { profile.lists.append(l); return }
+        profile.lists[i] = l
+        guard old.name != l.name else { return }
+        for r in profile.routes.indices {
+            profile.routes[r].conditions.destinations = profile.routes[r].conditions.destinations.map {
+                $0 == .list(old.name) ? .list(l.name) : $0
+            }
+        }
+    }
+
+    private func load(update: Bool) async {
+        let urls = profile.lists.map(\.url).filter(RuleLists.isValidURL)
+        guard let lookup, !urls.isEmpty else { infos = []; return }
+        if update { updating = true }
+        defer { if update { updating = false } }
+        do {
+            infos = try await lookup(urls, update)
+            failure = nil
+        } catch {
+            failure = Text.sentence("\(error)")
+        }
+    }
+}
+
+/// One list: its name in routes, and where it is published.
+struct RuleListEditor: View {
+    let list: RuleList?
+    let taken: Set<String>
+    let done: (RuleList?) -> Void
+    @State private var name: String
+    @State private var url: String
+
+    init(list: RuleList?, taken: Set<String>, done: @escaping (RuleList?) -> Void) {
+        self.list = list
+        self.taken = taken
+        self.done = done
+        _name = State(initialValue: list?.name ?? "")
+        _url = State(initialValue: list?.url ?? "")
+    }
+
+    private var cleanName: String { name.trimmingCharacters(in: .whitespaces).lowercased() }
+    private var cleanURL: String { url.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var problem: String? {
+        if cleanName.isEmpty || cleanURL.isEmpty { return nil }
+        if !RuleLists.isValidName(cleanName) { return "A name is letters, digits and “-”, like blocked-sites" }
+        if taken.contains(cleanName) { return "Another list has this name" }
+        if !RuleLists.isValidURL(cleanURL) { return "Enter an https:// address" }
+        return nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(list == nil ? "Add List" : "Edit List").font(.title3.weight(.semibold))
+            Form {
+                TextField("Name", text: $name, prompt: Text("blocked-sites"))
+                TextField("Address", text: $url, prompt: Text("https://…"))
+            }
+            Text("In routes: list:\(cleanName.isEmpty ? "name" : cleanName)")
+                .font(.caption.monospaced()).foregroundStyle(.secondary)
+            if let problem {
+                Label(problem, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { done(nil) }.keyboardShortcut(.cancelAction)
+                Button(list == nil ? "Add" : "Done") { done(RuleList(name: cleanName, url: cleanURL)) }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(cleanName.isEmpty || cleanURL.isEmpty || problem != nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
     }
 }
