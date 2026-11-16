@@ -108,22 +108,18 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
             schemaVersion = Profile.currentSchema
             if killSwitch == .off { killSwitch = .whileConnected }
         }
-        // Read again for what earlier versions wrote: lists of the sing-box
-        // project named `geoip:`/`geosite:`.
-        let old = (try? c.decodeIfPresent([LegacyListUse].self, forKey: .routes)) ?? nil
-        let older = (try? c.decodeIfPresent([LegacyListUse].self, forKey: .rules)) ?? nil
-        adoptLegacyLists(Set(((old ?? []) + (older ?? [])).flatMap(\.names)))
+        if !c.contains(.lists) { adoptLegacyLists() }
     }
 
-    /// Before lists were added by hand, `geoip:cn` and `geosite:…` named the
-    /// sing-box project's rule-sets (they read back as `list:geoip-cn`):
-    /// those lists are added with the address they always came from.
-    private mutating func adoptLegacyLists(_ names: Set<String>) {
+    /// Profiles from before lists (no `lists` at all) named the sing-box
+    /// project's rule-sets `geoip:cn` and `geosite:…`; they read back as
+    /// `list:geoip-cn`, and get the address they always came from.
+    private mutating func adoptLegacyLists() {
         let legacy = [("geoip-", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/"),
                       ("geosite-", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/")]
         for r in routes {
             for case .list(let n) in r.conditions.destinations where !lists.contains(where: { $0.name == n }) {
-                guard names.contains(n), let (_, base) = legacy.first(where: { n.hasPrefix($0.0) }) else { continue }
+                guard let (_, base) = legacy.first(where: { n.hasPrefix($0.0) }) else { continue }
                 lists.append(RuleList(name: n, url: base + n + ".srs"))
             }
         }
@@ -141,37 +137,9 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
         try c.encode(lan, forKey: .lan)
         try c.encode(killSwitch, forKey: .killSwitch)
         try c.encodeIfPresent(mtu, forKey: .mtu)
-        if !lists.isEmpty { try c.encode(lists, forKey: .lists) }
-    }
-
-    /// A route as earlier versions wrote it, for its `geoIP` and
-    /// `geoSite` destinations alone.
-    struct LegacyListUse: Decodable {
-        var names: [String]
-
-        private struct Key: CodingKey {
-            var stringValue: String
-            var intValue: Int? { nil }
-            init(stringValue: String) { self.stringValue = stringValue }
-            init?(intValue: Int) { nil }
-        }
-
-        init(from decoder: Decoder) throws {
-            names = []
-            guard let route = try? decoder.container(keyedBy: Key.self),
-                  let conditions = try? route.nestedContainer(keyedBy: Key.self, forKey: Key(stringValue: "conditions")),
-                  var list = try? conditions.nestedUnkeyedContainer(forKey: Key(stringValue: "destinations")) else { return }
-            while !list.isAtEnd {
-                // Each one is an object; anything else ends the look.
-                guard let d = try? list.nestedContainer(keyedBy: Key.self) else { break }
-                for (key, prefix) in [("geoIP", "geoip-"), ("geoSite", "geosite-")] {
-                    if let v = try? d.nestedContainer(keyedBy: Key.self, forKey: Key(stringValue: key)),
-                       let n = try? v.decode(String.self, forKey: Key(stringValue: "_0")) {
-                        names.append(prefix + n)
-                    }
-                }
-            }
-        }
+        // Always written, empty too: its absence marks a profile from before
+        // lists (see adoptLegacyLists).
+        try c.encode(lists, forKey: .lists)
     }
 
     struct LegacyTunnel: Decodable {

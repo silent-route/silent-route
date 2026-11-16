@@ -23,26 +23,27 @@ import Testing
 
     @Test func savedWithTheProfile() throws {
         var p = Profile(name: "P")
-        #expect(!String(decoding: try JSONEncoder().encode(p), as: UTF8.self).contains("lists"))
+        #expect(String(decoding: try JSONEncoder().encode(p), as: UTF8.self).contains(#""lists":[]"#))
         p.lists = [RuleList(name: "a", url: "https://a.org/a.txt")]
         #expect(try JSONDecoder().decode(Profile.self, from: try JSONEncoder().encode(p)) == p)
     }
 
     /// Profiles of 1.4 named the sing-box project's lists: they keep
-    /// working, as lists with the address they always came from. A list
-    /// named so by hand is not touched.
+    /// working, as lists with the address they always came from.
     @Test func earlierGeoNamesBecomeLists() throws {
         let old = #"""
         {"schemaVersion": 2, "name": "Old", "tunnels": [], "lan": "allow", "killSwitch": "whileConnected",
          "dns": {"directServer": "1.1.1.1/32", "tunnelServer": "1.1.1.1/32", "directSuffixes": []},
          "routes": [{"id": "00000000-0000-0000-0000-000000000001", "name": "R", "enabled": true, "target": {"direct": {}},
                      "killSwitch": true, "conditions": {"destinations": [{"geoIP": {"_0": "fr"}}, {"geoSite": {"_0": "netflix"}},
-                                                                           {"list": {"_0": "geoip-de"}}], "apps": [], "ports": []}}],
+                                                                           {"domainSuffix": {"_0": "a.example"}}], "apps": [], "ports": []}}],
          "defaultRoute": {"id": "00000000-0000-0000-0000-000000000002", "name": "Everything else", "enabled": true,
                           "target": {"direct": {}}, "killSwitch": true, "conditions": {"destinations": [], "apps": [], "ports": []}}}
         """#
         let p = try JSONDecoder().decode(Profile.self, from: Data(old.utf8))
-        #expect(p.routes[0].conditions.destinations == [.list("geoip-fr"), .list("geosite-netflix"), .list("geoip-de")])
+        #expect(p.routes[0].conditions.destinations == [.list("geoip-fr"), .list("geosite-netflix"), .domainSuffix("a.example")])
+        // Saved again, they are lists like any other: nothing more is added.
+        #expect(try JSONDecoder().decode(Profile.self, from: try JSONEncoder().encode(p)) == p)
         #expect(p.lists == [
             RuleList(name: "geoip-fr", url: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-fr.srs"),
             RuleList(name: "geosite-netflix", url: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-netflix.srs"),

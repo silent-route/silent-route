@@ -306,17 +306,14 @@ public actor Controller {
     public func update(profile new: Profile) async throws(CommandError) {
         let running = phase == .connected || phase == .reconnecting
         if running {
-            let errors = Validation.check(new)
-                .filter { $0.severity == .error }
-            guard errors.isEmpty else { throw .failed(errors.map(\.message).joined(separator: "; ")) }
-            // Its lists must be on disk: the helper cannot fetch them from
-            // behind the kill switch while switching over.
+            // The new profile must make a config — no errors, its lists on
+            // disk — before anything is switched over.
+            var env = options.configEnvironment
             if let lists = options.ruleLists {
-                let local = await lists.local(RuleLists.urls(new))
-                if let missing = new.lists.first(where: { l in RuleLists.urls(new).contains(l.url) && local[l.url] == nil }) {
-                    throw .failed(SingBoxConfig.Failure.listMissing(missing.name).description)
-                }
+                await lists.fetchMissing(new)
+                env.lists = await lists.local(RuleLists.urls(new))
             }
+            do { _ = try SingBoxConfig.generate(new, env: env) } catch { throw .failed(error.description) }
         }
         guard phase == .connected || phase == .reconnecting || phase == .off else { throw .busy(phase) }
         let guarded = profile.protectionMode != .off || new.protectionMode != .off
@@ -628,12 +625,12 @@ public actor Controller {
         try Task.checkCancellation()
         guard epoch == my else { return }
 
-        // The profile's lists: fetched on a start while the network is
-        // still open (saving the profile fetched them already). Behind the
-        // kill switch the helper reaches nothing: what is on disk is used.
+        // The profile's lists that are not on disk yet (saving the profile
+        // fetched them already): fetched now, also behind the kill switch,
+        // which lets the helper's downloads out as it does sing-box.
         var localLists: [String: SingBoxConfig.LocalList]?
         if let lists = options.ruleLists {
-            if !keepBlockingOnFailure { await lists.fetchMissing(profile) }
+            await lists.fetchMissing(profile)
             guard epoch == my else { return }
             localLists = await lists.local(RuleLists.urls(profile))
             guard epoch == my else { return }

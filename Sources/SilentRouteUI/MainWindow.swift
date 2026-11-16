@@ -15,7 +15,9 @@ public struct MainWindow: View {
     @State private var settingsOpen = false
     @State private var windowVisible = true
     /// The page of the profile shown, kept when another profile is chosen.
-    @SceneStorage("profileSection") private var profileSection: ProfileEditor.Section = .routes
+    /// (Not SceneStorage: this window is not a SwiftUI scene, and there it
+    /// never changes.)
+    @AppStorage("profileSection") private var profileSection: ProfileEditor.Section = .routes
 
     enum Item: Hashable {
         case monitor

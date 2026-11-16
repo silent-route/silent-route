@@ -1,6 +1,12 @@
 # Changelog
 
-## 1.5.0-beta
+## 1.5.2-beta
+
+Replaces 1.5.0-beta, which was withdrawn. Fixed since 1.5.0:
+
+- The Routes, Servers, DNS and Network buttons of a profile did nothing.
+- After an update with the VPN on, it could stay blocked behind the kill switch for minutes: it came back needing lists it had not downloaded yet, and could not download them there. The helper now fetches lists the way the kill switch lets out, also while it blocks.
+- Turning a VPN that is on to another profile first checks that the profile can run — its lists downloaded, no errors — and leaves the running one alone if not.
 
 ### Lists you add yourself
 

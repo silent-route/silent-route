@@ -53,7 +53,9 @@ enum Daemon {
         Daemon.removeLegacyLogs(paths)
         let engine = SingBoxEngine(paths: paths, group: group, trampoline: paths.helper.path,
                                    output: { sessionLog.engineOutput() })
-        let lists = RuleListStore(dir: paths.rules, tool: { await engine.ruleSet($0) })
+        let lists = RuleListStore(dir: paths.rules,
+                                  fetch: RuleListStore.curl(trampoline: paths.helper.path, group: group, scratch: paths.run),
+                                  tool: { await engine.ruleSet($0) })
         var options = Controller.Options(singBoxGroup: group, configEnvironment: env)
         options.captivePort = freePort()
         options.ruleLists = .init(local: { await lists.local($0) },

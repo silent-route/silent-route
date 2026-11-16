@@ -102,10 +102,9 @@ public final class SingBoxEngine: Engine, @unchecked Sendable {
     /// else its complaint.
     public func ruleSet(_ arguments: [String]) async -> String? {
         do { try verifyBinary() } catch { return error.localizedDescription }
-        let r = await Command.run(paths.singBox.path, ["rule-set"] + arguments, timeout: 60)
+        let r = await Command.run(paths.singBox.path, ["rule-set"] + arguments + ["--disable-color"], timeout: 60)
         guard !r.ok else { return nil }
-        let text = r.text.replacingOccurrences(of: #"\u{1B}\[[0-9;]*m"#, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? "exit \(r.status)" : String(text.prefix(200))
     }
 

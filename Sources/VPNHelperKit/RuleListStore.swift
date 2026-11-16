@@ -31,7 +31,7 @@ public actor RuleListStore {
     /// A list is checked again once it is this old.
     public static let maxAge: TimeInterval = 24 * 3600
 
-    public init(dir: URL, fetch: @escaping Fetch = RuleListStore.download, tool: @escaping RuleSetTool,
+    public init(dir: URL, fetch: @escaping Fetch, tool: @escaping RuleSetTool,
                 now: @escaping @Sendable () -> Date = { Date() }) {
         self.dir = dir
         self.fetch = fetch
@@ -98,14 +98,12 @@ public actor RuleListStore {
     /// them again.
     public func removeLegacy() {
         guard ensureFolder() else { return }
-        let fm = FileManager.default
-        for n in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] {
-            let isOurs = n.range(of: #"^[0-9a-f]{24}\.(srs|json)$"#, options: .regularExpression) != nil
-            if isOurs || n.hasPrefix(".") { continue }
-            let fd = open(dir.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            guard fd >= 0 else { return }
+        let fd = open(dir.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        for n in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        where n.range(of: #"^[0-9a-f]{24}\.(srs|json)$"#, options: .regularExpression) == nil && !n.hasPrefix(".") {
             SafeRemove.tree(in: fd, n)
-            close(fd)
         }
     }
 
@@ -219,18 +217,33 @@ public actor RuleListStore {
     private func srs(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".srs") }
     private func metaFile(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".json") }
 
-    /// HTTPS straight from the helper: through the tunnel while the VPN is
-    /// on (like any traffic of the Mac), directly while it is off. Never via
-    /// a system proxy, never from a cache.
-    public static let download: Fetch = { url in
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.connectionProxyDictionary = [:]
-        cfg.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        cfg.timeoutIntervalForRequest = 20
-        cfg.timeoutIntervalForResource = 120
-        let session = URLSession(configuration: cfg)
-        defer { session.finishTasksAndInvalidate() }
-        let (data, resp) = try await session.data(from: url)
-        return ((resp as? HTTPURLResponse)?.statusCode ?? 0, data)
+    /// curl, run with sing-box's group (`exec-engine`): the kill switch
+    /// lets it out, so a VPN coming back behind it (after an update, a
+    /// crash) can fetch a list it does not have yet. Names are looked up over
+    /// DNS-over-HTTPS by address — macOS's resolver is shut out by the kill
+    /// switch then — and, failing that, the usual way. HTTPS only, no proxy,
+    /// at most `maxBytes`. While the VPN is up it goes through the tunnel
+    /// like any traffic of the Mac.
+    public static func curl(trampoline: String, group: UInt32, scratch: URL) -> Fetch {
+        { url in
+            let file = scratch.appendingPathComponent("list-\(UUID().uuidString)")
+            defer { unlink(file.path) }
+            var last = ""
+            for doh in ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query", nil] as [String?] {
+                var args = ["/usr/bin/curl", "-sS", "-L", "--proto", "=https", "--proto-redir", "=https", "--noproxy", "*",
+                            "--connect-timeout", "10", "--max-time", "90", "--max-filesize", String(RuleLists.maxBytes),
+                            "-o", file.path, "-w", "%{http_code}"]
+                if let doh { args += ["--doh-url", doh] }
+                args.append(url.absoluteString)
+                let r = group > 0
+                    ? await Command.run(trampoline, ["exec-engine", String(group)] + args, timeout: 120)
+                    : await Command.run(args[0], Array(args.dropFirst()), timeout: 120)
+                if r.ok, let code = Int(r.text.suffix(3)) {
+                    return (code, (try? Data(contentsOf: file)) ?? Data())
+                }
+                last = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            throw Failure(reason: last.isEmpty ? "the download failed" : String(last.prefix(200)))
+        }
     }
 }

@@ -195,6 +195,19 @@ import VPNCore
         #expect(await calls.fetched == 1)
     }
 
+    /// After an update the VPN comes back behind the kill switch with lists
+    /// it has not got yet: they are fetched there (the helper's downloads
+    /// pass the kill switch as sing-box does), not refused for ever.
+    @Test func resumeBehindTheKillSwitchFetchesMissingLists() async throws {
+        let have = Box(false)
+        let local = Dictionary(uniqueKeysWithValues: Profile.domesticLists.map { ($0.url, SingBoxConfig.LocalList(path: "/r/\($0.name).srs", matchesNames: false)) })
+        let h = Harness(saved: PersistedState(wantConnected: true, enginePID: nil, pfToken: "T", bootTime: Date(timeIntervalSince1970: 500_000)),
+                        ruleLists: .init(local: { _ in have.value ? local : [:] }, fetchMissing: { _ in have.value = true }))
+        await h.controller.reconcileOnLaunch()
+        #expect(await h.wait(for: .connected))
+        #expect(await h.controller.status.killSwitchOn)
+    }
+
     /// A running VPN does not switch to a profile whose list is not there.
     @Test func noSwitchWithoutTheLists() async throws {
         let h = Harness(ruleLists: .init(local: { _ in [:] }, fetchMissing: { _ in }))
