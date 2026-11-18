@@ -14,7 +14,7 @@ import VPNRuntime
 public enum IPC {
     /// Bumped on any incompatible change; the app asks to reinstall the
     /// helper on a mismatch.
-    public static let protocolVersion = 11
+    public static let protocolVersion = 12
     public static let machService = "org.silentroute.app.helper"
 
     /// Clients the helper accepts. Each must be signed by the same
@@ -47,6 +47,8 @@ public enum IPC {
         case ruleLists([String])
         /// Download these lists now, then answer as ruleLists.
         case updateRuleLists([String])
+        /// Replace this user's server library.
+        case saveServers([Tunnel])
     }
 
     public struct Envelope: Codable, Sendable {

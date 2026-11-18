@@ -279,3 +279,34 @@ import Testing
         #expect(await again.detailedLogs(of: 502) == false, "another user's choice is their own")
     }
 }
+
+@Suite struct ServerLibraryTests {
+    static let socks = Tunnel(name: "proxy", server: Endpoint(host: "198.51.100.9", port: 1080), proto: .proxy(Proxy(kind: .socks5)))
+
+    /// Libraries from before have no servers; each user's are their own.
+    @Test func savedPerUser() async throws {
+        let dir = ProfileManagerTests.tempDir()
+        let m = ProfileManager(controller: Harness().controller, usersDir: dir, ownerFile: dir.appendingPathComponent("owner"))
+        try await m.saveServers([Self.socks], by: ProfileManagerTests.me)
+        #expect(await m.library(of: ProfileManagerTests.me).servers == [Self.socks])
+        #expect(await m.library(of: ProfileManagerTests.other).servers.isEmpty)
+        let again = ProfileManager(controller: Harness().controller, usersDir: dir, ownerFile: dir.appendingPathComponent("owner"))
+        #expect(await again.library(of: ProfileManagerTests.me).servers == [Self.socks])
+    }
+
+    /// A server that could not run is not kept: profiles take it as it is.
+    @Test func unusableServersAreRefused() async throws {
+        let dir = ProfileManagerTests.tempDir()
+        let m = ProfileManager(controller: Harness().controller, usersDir: dir, ownerFile: dir.appendingPathComponent("owner"))
+        var bad = Self.socks
+        bad.server.host = ""
+        await #expect(throws: ProfileManager.Failure.self) { try await m.saveServers([bad], by: ProfileManagerTests.me) }
+        await #expect(throws: ProfileManager.Failure.self) { try await m.saveServers([Self.socks, Self.socks], by: ProfileManagerTests.me) }
+        #expect(await m.library(of: ProfileManagerTests.me).servers.isEmpty)
+    }
+
+    @Test func olderLibrariesHaveNoServers() throws {
+        let old = #"{"profiles": [], "activeID": null}"#
+        #expect(try JSONDecoder().decode(ProfileLibrary.self, from: Data(old.utf8)).servers.isEmpty)
+    }
+}

@@ -334,6 +334,32 @@ public final class AppModel {
         }
     }
 
+    /// Changes the server library at once and saves it.
+    public func setServers(_ servers: [Tunnel]) {
+        library.servers = servers
+        Task { await saveServers(servers) }
+    }
+
+    /// A copy of a profile's server in the library.
+    public func addToLibrary(_ t: Tunnel) {
+        setServers(library.servers + [ServerCopy.copy(t, among: library.servers)])
+    }
+
+    /// Replaces the server library; nil, or why it was not saved (the
+    /// library is then as the helper has it).
+    @discardableResult
+    public func saveServers(_ servers: [Tunnel]) async -> String? {
+        library.servers = servers
+        do {
+            apply(try await backend.send(.saveServers(servers)))
+            return nil
+        } catch {
+            if let r = try? await backend.send(.getLibrary) { apply(r) }
+            notice = .init(error.localizedDescription, isError: true)
+            return error.localizedDescription
+        }
+    }
+
     public func delete(_ id: Profile.ID) async {
         await run(.deleteProfile(id))
     }

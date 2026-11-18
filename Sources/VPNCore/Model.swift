@@ -327,6 +327,13 @@ public struct Tunnel: Codable, Hashable, Identifiable, Sendable {
         self.proto = proto
         self.origin = origin
     }
+
+    /// Whether it carries UDP: a SOCKS5 proxy only with UDP turned on, an
+    /// HTTP proxy never; tunnels always.
+    public var carriesUDP: Bool {
+        guard case .proxy(let p) = proto else { return true }
+        return p.kind == .socks5 && p.udp
+    }
 }
 
 /// sing-box multiplexing: many connections carried inside a few to the

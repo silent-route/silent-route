@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0-beta
+
+- **Server Library**, in the sidebar under Logs: servers and proxies kept apart from profiles. A profile adds one with **Add Server › From Library** and takes a copy of its own, so it stays complete when shared; **Add to Library** in a server's menu goes the other way. The library is each macOS user's own.
+- **When another VPN's kill switch is on**, Silent Route can reach none of its servers. A failed start and a server check now say so — *another firewall on this Mac (pf) blocks the way* — instead of reporting the servers as dead.
+- **A failed server check says why.** It showed macOS's *bad URL* whenever the server could not be reached; it now gives sing-box's own reason — a timeout, a refused or closed connection.
+- **No more waiting on HTTP/3 through a proxy without UDP.** Routes whose servers cannot carry UDP (a SOCKS5 proxy without UDP, an HTTP proxy) refuse it at once, as they refuse ping, so browsers move to TCP right away and the log no longer fills with *UDP is not supported*.
+- A double-click edits a server, also in the library.
+
 ## 1.5.2-beta
 
 Replaces 1.5.0-beta, which was withdrawn. Fixed since 1.5.0:

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import VPNCore
 @testable import SilentRouteUI
+@testable import VPNRuntime
 
 @Suite struct RouteAdditionTests {
     let telegram = TrafficMonitor.app("/Applications/Telegram.app/Contents/MacOS/Telegram (user)")
@@ -65,5 +66,29 @@ import VPNCore
         let both = Conditions(destinations: [.domainSuffix("de")], apps: [.bundle(path: "/Applications/Remote Desktop.app")])
         #expect(RouteSummary.conditions(both) == "de · apps: Remote Desktop")
         #expect(RouteSummary.conditions(Conditions()) == "nothing yet")
+    }
+}
+
+@Suite struct ServerCopyTests {
+    /// Into a profile (or the library) as a new server of its own.
+    @Test func copyHasItsOwnIdAndAFreeName() {
+        let a = Tunnel(name: "NL", server: Endpoint(host: "a.example", port: 443), proto: .proxy(Proxy(kind: .socks5)))
+        let c = ServerCopy.copy(a, among: [a])
+        #expect(c.id != a.id && c.name == "NL 2" && c.server == a.server)
+        #expect(ServerCopy.copy(a, among: []).name == "NL")
+    }
+}
+
+/// A failed server check says what sing-box saw, not macOS's "bad URL".
+@Suite struct ProbeReasonTests {
+    @Test func lastConnectionError() {
+        let log = """
+        INFO[0000] sing-box started (0.01s)
+        ERROR[0002] [344241730 596ms] connection: open connection to ipinfo.io:443 using outbound/socks[probe]: dial tcp 192.0.2.1:1080: i/o timeout
+        """
+        #expect(Probe.reason(inLog: log) == "dial tcp 192.0.2.1:1080: i/o timeout")
+        #expect(Probe.reason(inLog: "ERROR[0002] [1 5ms] connection: open connection to ipinfo.io:443 using outbound/socks[probe]: EOF")
+                == "the connection was closed (EOF)")
+        #expect(Probe.reason(inLog: "INFO[0000] sing-box started") == nil)
     }
 }

@@ -311,6 +311,9 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                 await lists.update(RuleLists.urls(p), olderThan: .infinity)
                 try await profiles.save(p, by: uid)
                 return await respond(uid, library: true)
+            case .saveServers(let servers):
+                try await profiles.saveServers(servers, by: uid)
+                return await respond(uid, library: true)
             case .deleteProfile(let id):
                 try await profiles.delete(id, by: uid)
                 return await respond(uid, library: true)
@@ -334,6 +337,7 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
                                                  launcher: [paths.helper.path, "exec-engine", String(group)], direct: true)
                 } catch {
                     await probes.leave()
+                    if await SystemNetwork.foreignFirewall() { throw Refusal("\(error) — \(ForeignFirewall.hint)") }
                     throw error
                 }
                 await probes.leave()
@@ -375,6 +379,11 @@ final class Service: NSObject, HelperXPCProtocol, @unchecked Sendable {
         }
         return await respond(uid)
     }
+}
+
+struct Refusal: Error, CustomStringConvertible {
+    var description: String
+    init(_ d: String) { description = d }
 }
 
 /// At most `limit` at once; the rest are refused rather than queued.

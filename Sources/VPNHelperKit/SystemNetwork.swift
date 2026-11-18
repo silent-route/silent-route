@@ -90,6 +90,19 @@ public struct SystemNetwork: NetworkInspector {
         return iface
     }
 
+    public func foreignFirewall() async -> Bool { await Self.foreignFirewall() }
+
+    public static func foreignFirewall() async -> Bool {
+        guard (await Command.run("/sbin/pfctl", ["-s", "info"])).text.contains("Status: Enabled") else { return false }
+        return Self.blocksOutsideAnchors((await Command.run("/sbin/pfctl", ["-s", "rules"])).text)
+    }
+
+    /// The main ruleset's own rules (anchors show as one `anchor` line each):
+    /// macOS's has no `block`; ours are inside our anchor.
+    static func blocksOutsideAnchors(_ rules: String) -> Bool {
+        rules.split(whereSeparator: \.isNewline).contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("block") }
+    }
+
     public func restoreRouting() async {
         // Put the default route back through the physical gateway, but only
         // if the route to the internet is broken or still ours. A live utun

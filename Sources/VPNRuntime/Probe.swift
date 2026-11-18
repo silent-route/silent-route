@@ -52,11 +52,16 @@ public enum Probe {
                                        attributes: [.posixPermissions: 0o600])
 
         let process = Process()
-        let argv = launcher + [singBox, "run", "-c", config.path]
+        let argv = launcher + [singBox, "run", "-c", config.path, "--disable-color"]
         process.executableURL = URL(fileURLWithPath: argv[0])
         process.arguments = Array(argv.dropFirst())
         process.currentDirectoryURL = dir
-        let log = Pipe()
+        // To a file, read once sing-box is gone: why it could not reach the
+        // server is said there, and only there.
+        let logURL = dir.appendingPathComponent("probe.log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        let log = try FileHandle(forWritingTo: logURL)
+        defer { try? log.close() }
         process.standardOutput = log
         process.standardError = log
         try process.run()
@@ -67,8 +72,7 @@ public enum Probe {
         while !portOpen(socksPort) {
             if !process.isRunning || Date() > deadline {
                 stop(process)
-                let text = String(decoding: log.fileHandleForReading.availableData, as: UTF8.self)
-                throw Failure.singBoxDidNotStart(text)
+                throw Failure.singBoxDidNotStart((try? String(contentsOf: logURL, encoding: .utf8)) ?? "")
             }
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -90,7 +94,11 @@ public enum Probe {
         do {
             (data, _) = try await session.data(from: URL(string: "https://ipinfo.io/json")!)
         } catch {
-            throw Failure.noResponse(error.localizedDescription)
+            // macOS says only "bad URL" when the local proxy cannot reach the
+            // server: sing-box's own words say why.
+            stop(process)
+            throw Failure.noResponse(reason(inLog: (try? String(contentsOf: logURL, encoding: .utf8)) ?? "")
+                                     ?? error.localizedDescription)
         }
         let latency = Int(Date().timeIntervalSince(started) * 1000)
 
@@ -101,6 +109,15 @@ public enum Probe {
         let warnings: [String] = []
         return Report(ip: info.ip, country: info.country, city: info.city, org: info.org,
                       latencyMs: latency, warnings: warnings)
+    }
+
+    /// The last error sing-box gave for a connection — "dial tcp
+    /// 203.0.113.9:443: i/o timeout", "EOF" — or nil if it gave none.
+    static func reason(inLog log: String) -> String? {
+        guard let line = log.split(whereSeparator: \.isNewline).last(where: { $0.contains("ERROR") }) else { return nil }
+        let text = line.range(of: "]: ", options: .backwards).map { String(line[$0.upperBound...]) } ?? String(line)
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed == "EOF" ? "the connection was closed (EOF)" : trimmed
     }
 
     /// SIGTERM, then SIGKILL after 3 s: a check must end, and must not keep

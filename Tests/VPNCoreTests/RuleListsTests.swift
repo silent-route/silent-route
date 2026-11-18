@@ -149,3 +149,34 @@ import Testing
         #expect(rules.contains { $0["domain_suffix"] == ["shop.example"] && $0["server"] == "dns-direct" })
     }
 }
+
+/// UDP to servers that cannot carry it is refused at once, as ping is: a
+/// browser then uses TCP instead of waiting on HTTP/3.
+@Suite struct UncarriedTrafficTests {
+    func profile(udp: Bool) -> Profile {
+        let socks = Tunnel(name: "proxy", server: Endpoint(host: "198.51.100.9", port: 1080),
+                           proto: .proxy(Proxy(kind: .socks5, udp: udp)))
+        var p = Profile(name: "P", tunnels: [socks], routes: [
+            Route(name: "sites", conditions: Conditions(destinations: [.domainSuffix("a.example")]), target: .servers([socks.id])),
+        ])
+        p.defaultRoute.target = .servers([socks.id])
+        return p
+    }
+
+    func refusals(_ p: Profile) throws -> [JSON] {
+        let rules = try #require(try SingBoxConfig.generate(p, env: Fixtures.env)["route"]?["rules"]?.arrayValue)
+        return rules.filter { $0["action"] == "reject" }
+    }
+
+    @Test func tcpOnlyServersRefuseUDP() throws {
+        let r = try refusals(profile(udp: false))
+        #expect(r.contains { $0["mode"] == "and" && ($0["rules"]?.arrayValue ?? []).contains { $0["network"] == ["icmp", "udp"] } })
+        #expect(r.contains { $0["inbound"] != nil && $0["network"] == ["icmp", "udp"] })
+    }
+
+    @Test func udpCarryingServersKeepIt() throws {
+        let r = try refusals(profile(udp: true))
+        #expect(!r.contains { ($0["network"]?.arrayValue ?? []).contains("udp") })
+        #expect(r.contains { $0["inbound"] != nil && $0["network"] == ["icmp"] })
+    }
+}

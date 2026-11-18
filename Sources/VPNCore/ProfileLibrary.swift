@@ -6,10 +6,24 @@ public struct ProfileLibrary: Codable, Hashable, Sendable {
     public var profiles: [Profile]
     /// The profile `start` connects with and the menu bar shows.
     public var activeID: Profile.ID?
+    /// The server library: servers kept to add to any profile, which takes
+    /// a copy of its own.
+    public var servers: [Tunnel]
 
-    public init(profiles: [Profile] = [], activeID: Profile.ID? = nil) {
+    public init(profiles: [Profile] = [], activeID: Profile.ID? = nil, servers: [Tunnel] = []) {
         self.profiles = profiles
         self.activeID = activeID
+        self.servers = servers
+    }
+
+    enum CodingKeys: String, CodingKey { case profiles, activeID, servers }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        profiles = try c.decode([Profile].self, forKey: .profiles)
+        activeID = try c.decodeIfPresent(Profile.ID.self, forKey: .activeID)
+        // Libraries from before the server library have none.
+        servers = try c.decodeIfPresent([Tunnel].self, forKey: .servers) ?? []
     }
 
     public var active: Profile? { activeID.flatMap(profile) }

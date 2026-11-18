@@ -43,6 +43,9 @@ public protocol NetworkInspector: Sendable {
     func tunInterface() async -> String?
     /// A description of another VPN that already owns the default route.
     func foreignTunnel() async -> String?
+    /// pf blocks traffic outside our anchor: most likely another VPN's kill
+    /// switch, which drops the way to our servers too.
+    func foreignFirewall() async -> Bool
     /// Panic cleanup: put the default route back on a physical gateway if it
     /// still points at a dead tunnel, and flush the DNS cache.
     func restoreRouting() async
@@ -112,4 +115,13 @@ public struct PersistedState: Codable, Equatable, Sendable {
         // restart itself — far more than this.
         return abs(bootTime.timeIntervalSince(now)) > 10
     }
+}
+
+extension NetworkInspector {
+    public func foreignFirewall() async -> Bool { false }
+}
+
+/// Said when servers do not answer while another firewall blocks the way.
+public enum ForeignFirewall {
+    public static let hint = "another firewall on this Mac (pf) blocks the way — most likely another VPN's kill switch; turn that VPN off first"
 }

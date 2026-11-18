@@ -157,14 +157,14 @@ public enum SingBoxConfig {
             routeRules.append(["ip_is_private": true, "action": "route", "outbound": .string(directTag)])
         }
         for r in routes {
-            if let icmp = icmpReject(r) { routeRules.append(icmp) }
+            if let refusal = refusal(r, in: profile) { routeRules.append(refusal) }
             routeRules.append(routeRule(r))
         }
         var final = directTag
         switch def.target {
         case .servers:
             final = routeTag(def.id)
-            routeRules.append(["inbound": [.string(tunTag)], "network": .strings(["icmp"]), "action": "reject"])
+            routeRules.append(["inbound": [.string(tunTag)], "network": .strings(uncarried(def, in: profile)), "action": "reject"])
         case .direct: break
         // A rule needs a condition: everything enters through the TUN.
         case .block: routeRules.append(["inbound": [.string(tunTag)], "action": "reject"])
@@ -400,20 +400,30 @@ public enum SingBoxConfig {
         return .object(rule)
     }
 
-    /// Ping (ICMP) cannot travel through a proxy server: sent to a route's
-    /// servers, sing-box drops every packet with a warning in the log, and
-    /// the ping just times out. Refused at once instead — never sent direct,
-    /// which would show the destination past the tunnel. Routes that go
-    /// direct keep their ping; a route limited to TCP or UDP never sees it.
-    static func icmpReject(_ r: Route) -> JSON? {
-        guard case .servers = r.target, r.conditions.network == nil else { return nil }
+    /// What a route's servers cannot carry: ping (ICMP) never travels
+    /// through a proxy server, and UDP not when none of them takes it (a
+    /// SOCKS5 proxy without UDP, an HTTP proxy). Sent there, sing-box drops
+    /// every packet with an error in the log, and the app waits for nothing.
+    static func uncarried(_ r: Route, in p: Profile) -> [String] {
+        guard case .servers = r.target else { return [] }
+        let chain = p.chain(of: r).compactMap(p.tunnel)
+        return chain.isEmpty || chain.contains(where: \.carriesUDP) ? ["icmp"] : ["icmp", "udp"]
+    }
+
+    /// Refused at once instead: a browser then moves from HTTP/3 to TCP
+    /// right away, and nothing is ever sent direct, which would show the
+    /// destination past the tunnel. Routes that go direct keep both; a route
+    /// limited to TCP or UDP only ever sees its own.
+    static func refusal(_ r: Route, in p: Profile) -> JSON? {
+        let networks = uncarried(r, in: p).filter { r.conditions.network == nil || $0 == r.conditions.network?.rawValue }
+        guard !networks.isEmpty else { return nil }
         var match = r
         match.target = .block
         match.fragmentTLS = false
         guard case .object(var inner) = routeRule(match) else { return nil }
         inner["action"] = nil
         return .object(["type": "logical", "mode": "and",
-                        "rules": .array([.object(inner), ["network": .strings(["icmp"])]]),
+                        "rules": .array([.object(inner), ["network": .strings(networks)]]),
                         "action": "reject"])
     }
 

@@ -59,7 +59,9 @@ struct ProfileEditor: View {
                         switch section {
                         case .routes: RoutesSection(profile: $draft, liveServers: running ? model.status.servers : [],
                                                     liveRoutes: running ? model.status.routes : [])
-                        case .servers: ServersSection(check: helperCheck, profile: $draft, live: running ? model.status.servers : [])
+                        case .servers: ServersSection(check: helperCheck, profile: $draft, live: running ? model.status.servers : [],
+                                                      library: model.helper == .ready ? model.library.servers : nil,
+                                                      addToLibrary: model.helper == .ready ? { model.addToLibrary($0) } : nil)
                         case .dns: DNSSection(dns: $draft.dns)
                         case .network: NetworkSection(profile: $draft, lists: helperLists)
                         }

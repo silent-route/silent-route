@@ -230,6 +230,16 @@ public actor ProfileManager {
         try commit(uid) { lib throws(ProfileLibrary.Failure) in try lib.upsert(p) }
     }
 
+    /// The user's server library, replaced whole. Each server must be
+    /// usable as it is: it is copied into profiles as it stands.
+    public func saveServers(_ servers: [Tunnel], by uid: uid_t) throws(Failure) {
+        guard Set(servers.map(\.id)).count == servers.count else { throw Failure("Two servers share an id") }
+        let probe = Profile(name: "Library", tunnels: servers)
+        let errors = Validation.check(probe).filter { $0.severity == .error && $0.tunnel != nil }
+        guard errors.isEmpty else { throw Failure(errors.map(\.message).joined(separator: "; ")) }
+        try commit(uid) { lib in lib.servers = servers }
+    }
+
     public func delete(_ id: Profile.ID, by uid: uid_t) async throws(Failure) {
         var lib = library(of: uid)
         let live = await drives(uid)

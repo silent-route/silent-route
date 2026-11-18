@@ -17,3 +17,16 @@ import Testing
         #expect(config == "proxy-user = \"silentroute:s3cr3t\\\"\\\\x\"\n")
     }
 }
+
+@Suite struct ForeignFirewallTests {
+    /// macOS's own main ruleset, and ours (in an anchor), block nothing
+    /// there; another VPN's kill switch does.
+    @Test func blockRulesOutsideAnchors() {
+        let apple = """
+        scrub-anchor "com.apple/*" all fragment reassemble
+        anchor "com.apple/*" all
+        """
+        #expect(!SystemNetwork.blocksOutsideAnchors(apple))
+        #expect(SystemNetwork.blocksOutsideAnchors(apple + "\npass out quick on en0 inet proto udp from any to <vpn_server>\nblock drop out quick on en0 all"))
+    }
+}

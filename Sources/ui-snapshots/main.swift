@@ -46,7 +46,7 @@ let home: Profile = {
 }()
 let work = Profile.example(name: "Work", tunnels: [nl])
 let empty = Profile(name: "Draft")
-let library = ProfileLibrary(profiles: [home, work, empty], activeID: home.id)
+let library = ProfileLibrary(profiles: [home, work, empty], activeID: home.id, servers: [nl, de])
 
 /// Netherlands is down: "Everything else" runs through the backup proxy; Streaming is on
 /// its first server, the proxy; Claude/OpenAI on Germany.
@@ -216,6 +216,8 @@ MainActor.assumeIsolated {
     // A wide window: the page takes its width.
     render("editor-routes-wide", size: CGSize(width: 1200, height: 640),
            ProfileEditor(model: model(.ready, connected), saved: home, section: .routes))
+    render("server-library", size: CGSize(width: 900, height: 520), ServerLibraryView(model: model(.ready, connected)))
+    renderWindow("full-server-library", size: win, MainWindow(model: model(.ready, connected), showServers: true))
     render("editor-empty", size: CGSize(width: 760, height: 480), ProfileEditor(model: model(), saved: empty))
     render("window-not-installed", size: win, MainWindow(model: model(.notInstalled, VPNStatus(phase: .off), ProfileLibrary())))
     render("add-tunnel", AddServerSheet(draft: ServerDraft(de), isNew: false, profile: home) { _ in })

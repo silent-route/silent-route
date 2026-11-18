@@ -22,12 +22,14 @@ public struct MainWindow: View {
     enum Item: Hashable {
         case monitor
         case logs
+        case servers
         case profile(Profile.ID)
     }
 
-    public init(model: AppModel, selection: Profile.ID? = nil, showMonitor: Bool = false, showLogs: Bool = false) {
+    public init(model: AppModel, selection: Profile.ID? = nil, showMonitor: Bool = false, showLogs: Bool = false,
+                showServers: Bool = false) {
         self.model = model
-        _selection = State(initialValue: showLogs ? .logs : showMonitor ? .monitor : selection.map(Item.profile))
+        _selection = State(initialValue: showServers ? .servers : showLogs ? .logs : showMonitor ? .monitor : selection.map(Item.profile))
     }
 
     /// For the snapshot tool: the Monitor page with given data.
@@ -41,6 +43,7 @@ public struct MainWindow: View {
         switch selection {
         case .monitor: "Monitor"
         case .logs: "Logs"
+        case .servers: "Server Library"
         case .profile: "Profile"
         case nil: "Silent Route"
         }
@@ -100,7 +103,7 @@ public struct MainWindow: View {
         }
         .onChange(of: model.library.profiles.map(\.id)) { _, ids in
             if case .profile(let s) = selection, ids.contains(s) { return }
-            if selection == .monitor || selection == .logs { return }
+            if selection == .monitor || selection == .logs || selection == .servers { return }
             selection = (model.library.activeID ?? ids.first).map(Item.profile)
         }
         .onReceive(NotificationCenter.default.publisher(for: WindowCommand.notification)) { note in
@@ -153,6 +156,7 @@ public struct MainWindow: View {
         List(selection: $selection) {
             Label("Monitor", systemImage: "chart.xyaxis.line").tag(Item.monitor)
             Label("Logs", systemImage: "doc.text").tag(Item.logs)
+            Label("Server Library", systemImage: "server.rack").tag(Item.servers)
             Section("Profiles") {
                 // The standard sidebar look, as in Finder, Mail and Notes:
                 // the system's own selection, no card around the rows.
@@ -211,6 +215,8 @@ public struct MainWindow: View {
                 MonitorView(model: model, monitor: monitor)
             case .logs:
                 LogsView(model: model)
+            case .servers:
+                ServerLibraryView(model: model)
             case .profile(let id):
                 if let p = model.library.profile(id) {
                     ProfileEditor(model: model, saved: p, section: $profileSection).id(id)

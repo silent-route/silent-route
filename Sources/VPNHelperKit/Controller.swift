@@ -698,7 +698,7 @@ public actor Controller {
                 try await waitForLogin(epoch: my, pid: pid, proxy: proxy)
             } else {
                 if epoch == my { await killEngine(pid) }
-                throw CommandError.failed(failure)
+                throw CommandError.failed(await network.foreignFirewall() ? "\(failure) — \(ForeignFirewall.hint)" : failure)
             }
         }
         guard epoch == my, let tun else { return }
