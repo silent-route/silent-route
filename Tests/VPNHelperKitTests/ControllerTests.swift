@@ -747,6 +747,25 @@ import Testing
         #expect(!(await h.world.blocking))
     }
 
+    /// Turned off while sing-box is still starting: "off" comes only once
+    /// that sing-box is gone again (found by the random sequences on CI).
+    @Test func offWaitsForAStartingEngine() async throws {
+        let h = Harness()
+        await h.world.set { $0.holdLaunch = true }
+        let starting = Task { try? await h.controller.start() }
+        #expect(await h.waitWorld { !$0.running.isEmpty })
+        let stopping = Task { await h.controller.stop() }
+        for _ in 0..<20 { await Task.yield() }
+        // Still starting: not off yet, whatever stop has done so far.
+        #expect(await h.controller.status.phase != .off)
+        await h.world.set { $0.holdLaunch = false }
+        await stopping.value
+        await starting.value
+        #expect(await h.controller.status.phase == .off)
+        #expect(await h.world.running.isEmpty)
+        #expect(!(await h.world.blocking))
+    }
+
     // MARK: random sequences
 
     /// Random commands and failures. After every step: if the user wants the

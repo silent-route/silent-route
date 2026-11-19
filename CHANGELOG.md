@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1-beta
+
+- **Turning off is final at once.** Turn Off or Emergency Restore pressed just as sing-box was starting (a start, a reconnect, a switch of profiles) reported the VPN off while that sing-box was still coming up, and stopped it a moment later. Turning off now waits for any start or stop under way, so once it says off, nothing of Silent Route's is left running.
+
 ## 1.6.0-beta
 
 - **Server Library**, in the sidebar under Logs: servers and proxies kept apart from profiles. A profile adds one with **Add Server › From Library** and takes a copy of its own, so it stays complete when shared; **Add to Library** in a server's menu goes the other way. The library is each macOS user's own.

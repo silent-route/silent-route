@@ -18,6 +18,8 @@ actor World {
     var nextPID: Int32 = 100
     var checkFails = false
     var launchFails = false
+    /// A launch that takes its time: started, not yet returned to the caller.
+    var holdLaunch = false
     var dieRightAfterLaunch = false
     var tunAppears = true
     var healthy = true
@@ -110,6 +112,7 @@ struct FakeEngine: Engine {
             return pid
         }
         if await world.dieRightAfterLaunch { await world.crash(pid) }
+        while await world.holdLaunch { try? await Task.sleep(for: .milliseconds(1)) }
         return pid
     }
     func terminate(pid: Int32) async {

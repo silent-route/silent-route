@@ -259,6 +259,7 @@ public actor Controller {
         recovery = nil
         set(.stopping)
         await teardown()
+        await engineSettled()
         lastError = nil
         set(.off)
         session(.ended(reason: "turned off"))
@@ -281,11 +282,12 @@ public actor Controller {
         set(.stopping)
         await pfRun { await $0.flush() }
         if let token { await pfRun { await $0.release(token: token) } }
-        if let pid { await engine.terminate(pid: pid) }
+        if let pid { await stopEngine(pid) }
         await network.restoreRouting()
         await network.restoreDNS()
         await network.releaseLocalDNS()
         localDNS = false
+        await engineSettled()
         session(.ended(reason: "Emergency Restore"))
         via = [:]
         latency = [:]
@@ -326,7 +328,7 @@ public actor Controller {
         let my = epoch
         if guarded { await holdBlocking(epoch: my) }
         guard epoch == my else { return }
-        if let pid = enginePID { enginePID = nil; await engine.terminate(pid: pid) }
+        if let pid = enginePID { enginePID = nil; await stopEngine(pid) }
         guard epoch == my else { return }
         beginRecovery(epoch: my, reason: nil)
     }
@@ -377,7 +379,7 @@ public actor Controller {
         guard now.timeIntervalSince(since) >= options.restartAfterSeconds else { return }
         downSince = nil
         epoch += 1
-        if let pid = enginePID { enginePID = nil; await engine.terminate(pid: pid) }
+        if let pid = enginePID { enginePID = nil; await stopEngine(pid) }
         beginRecovery(epoch: epoch, reason: "no exit answers")
     }
 
@@ -491,7 +493,7 @@ public actor Controller {
         // An orphaned sing-box from a crashed helper: we can no longer observe
         // it, so it goes. pf (if it was on) keeps blocking meanwhile.
         if !rebooted, let pid = saved?.enginePID, await engine.isRunning(pid: pid) {
-            await engine.terminate(pid: pid)
+            await stopEngine(pid)
         }
 
         let resume = !rebooted && (saved?.wantConnected ?? false)
@@ -591,7 +593,7 @@ public actor Controller {
                 if pfToken == nil { pfToken = try await pfTry { try await $0.enable() } }
                 if let pid = enginePID {
                     enginePID = nil
-                    await engine.terminate(pid: pid)
+                    await stopEngine(pid)
                 }
                 await network.releaseLocalDNS()
                 localDNS = false
@@ -655,11 +657,17 @@ public actor Controller {
             guard epoch == my else { return }
         }
 
-        let pid = try await engine.launch(config: config) { [weak self] pid in
-            Task { await self?.engineExited(pid: pid) }
+        // Started and, if a newer command took over meanwhile, stopped again
+        // as one engine operation: turning off waits for it.
+        let launched: Int32? = try await engineOperation {
+            let pid = try await engine.launch(config: config) { [weak self] pid in
+                Task { await self?.engineExited(pid: pid) }
+            }
+            guard epoch == my else { await engine.terminate(pid: pid); return nil }
+            enginePID = pid
+            return pid
         }
-        guard epoch == my else { await engine.terminate(pid: pid); return }
-        enginePID = pid
+        guard let pid = launched else { return }
         publish()
 
         // Wait for the TUN interface.
@@ -829,7 +837,38 @@ public actor Controller {
 
     private func killEngine(_ pid: Int32) async {
         if enginePID == pid { enginePID = nil }
-        await engine.terminate(pid: pid)
+        await stopEngine(pid)
+    }
+
+    // MARK: Engine operations
+
+    /// sing-box starts and stops under way. Turning off waits for them, so
+    /// "off" never has a sing-box still coming or going (a switch of
+    /// profiles, a reconnect, racing with the user's Turn Off).
+    private var engineOperations = 0
+    private var engineIdle: [CheckedContinuation<Void, Never>] = []
+
+    private func engineOperation<T>(_ body: () async throws -> T) async rethrows -> T {
+        engineOperations += 1
+        defer {
+            engineOperations -= 1
+            if engineOperations == 0 {
+                let waiting = engineIdle
+                engineIdle = []
+                for w in waiting { w.resume() }
+            }
+        }
+        return try await body()
+    }
+
+    private func stopEngine(_ pid: Int32) async {
+        await engineOperation { await engine.terminate(pid: pid) }
+    }
+
+    /// Returns once no sing-box is starting or stopping.
+    private func engineSettled() async {
+        guard engineOperations > 0 else { return }
+        await withCheckedContinuation { engineIdle.append($0) }
     }
 
     /// Reconnect loop with exponential backoff. pf keeps blocking throughout.
@@ -885,7 +924,7 @@ public actor Controller {
         localDNS = false
         if let pid = enginePID {
             enginePID = nil
-            await engine.terminate(pid: pid)
+            await stopEngine(pid)
         }
         connectedSince = nil
         sessionSince = nil
