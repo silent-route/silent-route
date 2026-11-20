@@ -1,6 +1,6 @@
 # Silent Route
 
-A macOS client for [sing-box](https://github.com/SagerNet/sing-box) that decides — per site, address, country, app and port — which tunnel or proxy each piece of traffic takes, and backs it with a pf kill switch, so nothing leaves the Mac by a path you didn't choose.
+A macOS client for [sing-box](https://github.com/SagerNet/sing-box) that decides — per site, address, list, app and port — which tunnel or proxy each piece of traffic takes, and backs it with a pf kill switch, so nothing leaves the Mac by a path you didn't choose.
 
 I wrote it because I needed several exits at once — some traffic direct, some through one server, some through another — and no client did that together with a kill switch I could trust.
 
@@ -15,6 +15,7 @@ Intel and Apple Silicon, macOS 14 Sonoma through macOS 27 Golden Gate.
 **Routing**
 - A profile holds servers and routes. Servers: Hysteria2, VLESS (incl. Reality), Trojan, Shadowsocks, VMess, SOCKS5, HTTP, HTTPS — from a share link, by hand, or pasted in the usual seller formats (`host:port:user:pass`, `user:pass@host:port`…). Link options sing-box can't do are reported, not dropped. The **Server Library** keeps servers apart from profiles; a profile takes a copy (Add Server › From Library), so it stays whole when exported.
 - A route matches by domain, IP/CIDR, lists you add (`list:name`), local network addresses, app, port and protocol, and sends traffic direct, blocks it, or through an ordered list of servers — the first that answers carries it. Its apps and its sites each match on their own (an app's traffic anywhere, a site from any app); ports and protocol narrow both. Routes are checked top to bottom; *Everything else* is last, and goes wherever you set it — through servers, direct or blocked. A new profile starts with it direct, so one app through a tunnel and the rest untouched works as is.
+- **Lists** of sites or addresses — a country's networks, a list of blocked sites — are added to a profile by their web address (Network › Lists): a sing-box rule-set (`.srs` or `.json`) or plain text, one site or address per line (v2fly and Clash styles too). Nothing is built in; the lists travel with the profile when it is shared, and **Update Now** fetches new versions (they are also checked daily). For example, to send a country's addresses direct, add a list `geoip-cn` with the address `https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs` and put `list:geoip-cn` into a direct route.
 - **Apple web content** is a route setting of its own: the web pages shown by Safari, Mail, the App Store and other Apple apps load through one shared macOS process (`com.apple.WebKit.Networking`) and cannot be told apart, so this one setting decides where they go — set in the route only, never from Monitor, with a warning: those apps then depend on that route. Nothing on the Mac is changed; turning the VPN off or Emergency Restore puts everything back. Safari itself can be listed like any app (it runs from the system cryptex; both its paths are matched); its pages follow the setting, which the app points out.
 - Switch profiles from the menu bar while connected; edits to the profile in use apply on Save, no reconnect needed. Profiles export as `.srprofile` files (they contain credentials).
 
@@ -56,13 +57,13 @@ When a route moves to its next server, your IP address changes mid-session. Bank
 
 ### Updating
 
-Settings → Updates (or Silent Route → Check for Updates…) downloads the release, verifies its SHA-256 and signature, updates the helper (administrator password), replaces the app and relaunches it. Profiles are kept, with the last ten copies in `/Library/Application Support/Silent Route/backups/`.
+Settings › Updates (or Silent Route › Check for Updates…) downloads the release, verifies its SHA-256 and signature, updates the helper (administrator password), replaces the app and relaunches it. Profiles are kept, with the last ten copies in `/Library/Application Support/Silent Route/backups/`.
 
 If the VPN was on with a kill switch, traffic stays blocked while the helper is replaced and the VPN comes back by itself; **Cancel** turns it off instead. With the VPN off, the network isn't touched. If the new helper fails, the old one is put back; if neither starts, the block stays until you choose **Restore Network** or restart the Mac.
 
 ### Uninstalling
 
-Settings → Uninstall Silent Route…, the `Uninstall Silent Route.command` in `/Library/Application Support/Silent Route/`, or an app cleaner such as AppCleaner (the helper notices, restores the network and removes itself). All remove the helper, profiles, the `_silentroute` group and `sroute`; session logs too, unless you choose to keep them.
+Settings › Uninstall Silent Route…, the `Uninstall Silent Route.command` in `/Library/Application Support/Silent Route/`, or an app cleaner such as AppCleaner (the helper notices, restores the network and removes itself). All remove the helper, profiles, the `_silentroute` group and `sroute`; session logs too, unless you choose to keep them.
 
 ### Recovery
 
@@ -76,7 +77,7 @@ Settings → Uninstall Silent Route…, the `Uninstall Silent Route.command` in 
 - **Kill switch:** sing-box runs with the `_silentroute` group, and the pf anchor `com.apple/silentroute` passes only that group's traffic on physical interfaces (plus loopback, DHCP and, optionally, the LAN). Anything not sent by sing-box is dropped, whatever the routing table says. The main ruleset and other anchors are left alone.
 - **Failover:** every 10 seconds the helper measures the servers in use through the clash API and picks, per route, the first that answers. If sing-box exits, the pf rules stay and the helper reconnects with backoff.
 - **Integrity:** binaries are copied into root-owned directories, and sing-box's SHA-256 is checked against `singbox.pin` before each launch. Logs are written into the user's folder without following symlinks, as new 0600 files.
-- No lists are built in. A profile's lists (Network › Lists) are added by their web address — a sing-box rule-set (.srs or .json) or plain text, one site or address per line (v2fly and Clash styles too). The helper downloads them when the profile is saved, checks them daily and on **Update Now**, and swaps a file only after sing-box has read it whole; a running VPN picks up a new version without reconnecting. Profiles from 1.4 that used `geoip:`/`geosite:` keep working: those become lists with the sing-box project's address they always came from.
+- **Lists:** the helper downloads a profile's lists into a root-only folder, checks them daily, and swaps a file only after sing-box has read it whole; a running VPN picks up a new version without reconnecting.
 
 Every connection Silent Route makes or lets through, DNS and the Wi-Fi login are described in [docs/network.md](docs/network.md) — in short, apart from your traffic only server checks, rule-set downloads, the login check and update checks go out; no telemetry. Design notes and test results: [docs/decisions.md](docs/decisions.md).
 
