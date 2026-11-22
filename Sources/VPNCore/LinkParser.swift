@@ -266,6 +266,18 @@ public enum LinkParser {
         } else if p.take("obfs-password") != nil {
             p.warnings.append("\"obfs-password\" without \"obfs\" — obfuscation not enabled")
         }
+        // Xray writes the obfuscation as a "finalmask" in JSON instead.
+        if let fm = p.take("fm") {
+            let masked = try finalMaskSalamander(fm)
+            if let obfsPassword, obfsPassword != masked {
+                throw .malformed("\"obfs-password\" and \"fm\" give different obfuscation passwords")
+            }
+            obfsPassword = masked
+        }
+        // Hysteria2 is always TLS (QUIC); Xray links say so.
+        if let security = p.take("security"), security != "tls" {
+            throw .unsupported("security \"\(security)\" (Hysteria2 is always TLS)")
+        }
         if let pin = p.take("pinSHA256") {
             throw .unsupported("certificate pinning (pinSHA256=\(pin)) — refusing rather than connecting unpinned")
         }
@@ -287,6 +299,25 @@ public enum LinkParser {
         let t = Tunnel(id: id, name: name(parts, fallback: "\(parts.host):\(port)"),
                        server: Endpoint(host: parts.host, port: port), proto: .hysteria2(h))
         return Result(tunnel: t, warnings: p.finish())
+    }
+
+    /// Xray's `fm` (finalmask): `{"udp":[{"type":"salamander","settings":{"password":"…"}}]}`.
+    /// Salamander is the one mask sing-box has; without the others the
+    /// server would not answer, so they are refused.
+    static func finalMaskSalamander(_ json: String) throws(Failure) -> String {
+        guard let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+            throw .malformed("\"fm\" is not JSON")
+        }
+        let udp = obj["udp"] as? [[String: Any]] ?? []
+        guard obj.keys.allSatisfy({ $0 == "udp" }), udp.count == 1,
+              let type = udp[0]["type"] as? String else {
+            throw .unsupported("finalmask \(json)")
+        }
+        guard type == "salamander" else { throw .unsupported("obfs \"\(type)\"") }
+        guard let password = (udp[0]["settings"] as? [String: Any])?["password"] as? String, !password.isEmpty else {
+            throw .missing("salamander password in \"fm\"")
+        }
+        return password
     }
 
     // MARK: - VLESS / Trojan (shared V2Ray-style parameters)

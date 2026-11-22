@@ -98,6 +98,23 @@ import Testing
         #expect(!h.tls.insecure)
     }
 
+    @Test func hysteria2XrayFinalMask() throws {
+        // Xray's form: salamander inside "fm", and security=tls.
+        let fm = #"{"udp":[{"settings":{"password":"m4sk"},"type":"salamander"}]}"#
+            .addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        let r = try LinkParser.parse("hysteria2://pw@h.example.org:35361?security=tls&fm=\(fm)&sni=h.example.org#x")
+        #expect(r.warnings.isEmpty)
+        guard case .hysteria2(let h) = r.tunnel.proto else { Issue.record("not hysteria2"); return }
+        #expect(h.obfsPassword == "m4sk")
+
+        let gecko = #"{"udp":[{"type":"gecko"}]}"#.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        #expect(throws: LinkParser.Failure.unsupported("obfs \"gecko\"")) {
+            try LinkParser.parse("hysteria2://pw@h.example.org?fm=\(gecko)")
+        }
+        #expect(throws: (any Error).self) { try LinkParser.parse("hysteria2://pw@h.example.org?fm=nope") }
+        #expect(throws: (any Error).self) { try LinkParser.parse("hysteria2://pw@h.example.org?security=none") }
+    }
+
     @Test func hysteria2UserPassIsPercentDecoded() throws {
         // "user%3Apass" in userinfo is "user:pass" auth, sent as one password.
         let r = try LinkParser.parse("hy2://alice%3Ap%40ss@203.0.113.7:1893?insecure=1#x")
