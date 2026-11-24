@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.2-beta
+## 1.6.3-beta
 
 Everything that changed since 1.0.1-beta. The betas in between were withdrawn.
 
@@ -25,7 +25,7 @@ Everything that changed since 1.0.1-beta. The betas in between were withdrawn.
 
 - **Server Library**, in the sidebar under Logs: servers and proxies kept apart from profiles. A profile adds one with **Add Server › From Library** and takes its own copy, so it stays complete when shared; **Add to Library** in a server's menu goes the other way. The library is each macOS user's own.
 - **Proxies in the formats sellers use.** In Add Server › Proxy, paste `host:port:user:pass`, `user:pass:host:port`, `user:pass@host:port`, `host:port@user:pass`, or the same with `|` or a space between the halves. Passwords containing `:` or `@` work too.
-- **Hysteria2 links from Xray** work: the obfuscation it writes in `fm` is read like `obfs`, and `security=tls` is accepted.
+- **Hysteria2 links from Xray** work: the obfuscation it writes in `fm` is read like `obfs`, and `security=tls` is accepted. Any other `security` value is noted and ignored, since Hysteria2 always uses TLS.
 - A server counts as down only after two missed checks in a row. Slow servers get up to 15 seconds to connect and 10 seconds for a health check, so a busy proxy is slow but not marked dead.
 - **Check** goes to the server directly, as the VPN does, so the latency is the server's own even while the VPN is on. A failed check shows sing-box's reason (timeout, connection refused or closed) instead of macOS's *bad URL*.
 - **When another VPN's kill switch is on**, Silent Route can reach none of its servers. A failed start and a server check now say *another firewall on this Mac (pf) blocks the way* instead of reporting the servers as dead.

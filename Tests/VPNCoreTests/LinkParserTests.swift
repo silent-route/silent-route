@@ -112,7 +112,9 @@ import Testing
             try LinkParser.parse("hysteria2://pw@h.example.org?fm=\(gecko)")
         }
         #expect(throws: (any Error).self) { try LinkParser.parse("hysteria2://pw@h.example.org?fm=nope") }
-        #expect(throws: (any Error).self) { try LinkParser.parse("hysteria2://pw@h.example.org?security=none") }
+        // Hysteria2 is TLS whatever the link says: noted, still added.
+        let none = try LinkParser.parse("hysteria2://pw@h.example.org?security=none")
+        #expect(none.warnings == ["\"security=none\" ignored: Hysteria2 always uses TLS"])
     }
 
     @Test func hysteria2UserPassIsPercentDecoded() throws {

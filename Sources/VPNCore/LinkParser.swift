@@ -274,9 +274,10 @@ public enum LinkParser {
             }
             obfsPassword = masked
         }
-        // Hysteria2 is always TLS (QUIC); Xray links say so.
+        // Hysteria2 is always TLS (QUIC); Xray links say so. Any other value
+        // changes nothing, so it is noted, not refused.
         if let security = p.take("security"), security != "tls" {
-            throw .unsupported("security \"\(security)\" (Hysteria2 is always TLS)")
+            p.warnings.append("\"security=\(security)\" ignored: Hysteria2 always uses TLS")
         }
         if let pin = p.take("pinSHA256") {
             throw .unsupported("certificate pinning (pinSHA256=\(pin)) — refusing rather than connecting unpinned")
