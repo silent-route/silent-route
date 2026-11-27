@@ -43,6 +43,33 @@ What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 
 When a route moves to its next server, your IP address changes mid-session. Banks, payment systems, marketplaces and AI services may then log you out or flag the account. For those, give the route a single server and turn its kill switch on: no connection is better than a sudden change of address.
 
+### Protocols
+
+What Silent Route can connect through, by link or by hand:
+
+| Protocol | What is supported |
+|---|---|
+| VLESS | TLS or Reality, XTLS Vision flow; TCP, WebSocket, gRPC, HTTPUpgrade and HTTP/2 transports; multiplexing without Vision |
+| VMess | the same transports, with or without TLS; multiplexing |
+| Trojan | the same transports and TLS; multiplexing |
+| Shadowsocks | AEAD and 2022 methods; obfs-local and v2ray-plugin; multiplexing |
+| Hysteria2 | Salamander obfuscation, port hopping |
+| SOCKS5, HTTP, HTTPS | with or without a login; UDP through SOCKS5 when turned on |
+
+Links come in the usual forms: `vless://`, `vmess://` (base64 JSON), `trojan://`, `ss://` (SIP002 and the older base64 form), `hysteria2://` or `hy2://`, `socks5://`, `http://`, `https://`, and the seller formats `host:port:user:pass` and `user:pass@host:port`.
+
+sing-box can do more than Silent Route offers. Not supported yet:
+
+- **Protocols:** TUIC, Hysteria (version 1), AnyTLS, ShadowTLS, WireGuard, NaiveProxy, SSH, Tor, and the newer types such as Snell.
+- **Transports:** QUIC (the V2Ray kind).
+- **Options:** the old Shadowsocks stream ciphers (`aes-256-cfb` and the like); Hysteria2 certificate pinning (`pinSHA256`): such a link is refused rather than connected without the pin.
+
+Some link parameters come from Xray and have no sing-box counterpart, so a server that needs them does not work in Silent Route: the XHTTP transport, VLESS encryption, post-quantum Reality verification (`pqv`), and TLS fragmentation of a Reality handshake (see [Known limitations](#known-limitations)).
+
+### Known limitations
+
+- **Reality servers behind DPI that reads the server name.** Some networks block a Reality connection by the server name in its first TLS message. Xray-based clients get through by splitting that message (TLS fragmentation). sing-box (checked in 1.13 and 1.14) does not split the Reality handshake, so Silent Route cannot connect to such a server from such a network. Where possible, use the same server over another protocol: VLESS or Trojan with ordinary TLS, or Hysteria2.
+
 ## Installation
 
 1. Download `Silent-Route-<version>.dmg` from [Releases](../../releases) and copy the app to Applications.
