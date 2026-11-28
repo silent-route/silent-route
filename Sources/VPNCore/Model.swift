@@ -314,6 +314,9 @@ public struct Tunnel: Codable, Hashable, Identifiable, Sendable {
     /// Several connections inside one, to a server that supports it (off
     /// when nil). See `Multiplex`.
     public var multiplex: Multiplex?
+    /// The TLS handshake split up, for DPI that reads the server name
+    /// (off when nil). See `TLSFragment`.
+    public var tlsFragment: TLSFragment?
 
     public enum Origin: Codable, Hashable, Sendable {
         case link(String)
@@ -363,6 +366,29 @@ public struct Multiplex: Codable, Hashable, Sendable {
         case .trojan, .shadowsocks, .vmess: true
         case .hysteria2, .proxy: false
         }
+    }
+}
+
+/// sing-box TLS fragmentation: the ClientHello is split so that DPI
+/// matching on its plain text (the server name) does not see it whole.
+/// `records` splits it into several TLS records and costs nothing;
+/// `packets` sends it in small TCP segments with pauses, slower, for DPI
+/// that reassembles records.
+public enum TLSFragment: String, Codable, CaseIterable, Sendable {
+    case records, packets
+
+    /// TLS over TCP only: Hysteria2 is QUIC. Not Reality: sing-box (1.13,
+    /// 1.14) accepts the option there but does not split anything.
+    public static func isSupported(by proto: TunnelProtocol) -> Bool {
+        let tls: TLS?
+        switch proto {
+        case .vless(let v): tls = v.tls
+        case .trojan(let t): tls = t.tls
+        case .vmess(let v): tls = v.tls
+        case .proxy(let p): tls = p.tls
+        case .hysteria2, .shadowsocks: tls = nil
+        }
+        return tls != nil && tls?.reality == nil
     }
 }
 

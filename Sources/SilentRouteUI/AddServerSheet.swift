@@ -122,6 +122,8 @@ struct AddServerSheet: View {
             let r = try LinkParser.parse(text, expecting: kind, proxyKind: proxyKind, id: draft.id)
             var filled = ServerDraft(r.tunnel)
             filled.id = draft.id
+            // Links never say; the choice made here stays.
+            filled.tlsFragment = draft.tlsFragment
             if !draft.name.trimmingCharacters(in: .whitespaces).isEmpty && !isNew { filled.name = draft.name }
             draft = filled
             linkError = nil
@@ -152,6 +154,7 @@ struct AddServerSheet: View {
             Section("TLS") {
                 TextField("Server name (SNI)", text: $draft.sni, prompt: Text("defaults to the server"))
                 Toggle("Allow insecure certificate", isOn: $draft.insecure)
+                fragmentPicker
             }
         }
     }
@@ -239,7 +242,21 @@ struct AddServerSheet: View {
                 } else {
                     Toggle("Allow insecure certificate", isOn: $draft.insecure)
                 }
+                if draft.proto != .hysteria2 && draft.security != .reality { fragmentPicker }   // see TLSFragment
             }
+        }
+    }
+
+    private var fragmentPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Split the handshake", selection: $draft.tlsFragment) {
+                Text("Off").tag(TLSFragment?.none)
+                Text("TLS records").tag(TLSFragment?.some(.records))
+                Text("TCP packets").tag(TLSFragment?.some(.packets))
+            }
+            Text("Hides the server name from providers that block by it. TLS records cost nothing; TCP packets are slower and help where records do not. Turn it off if the server does not connect with it.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

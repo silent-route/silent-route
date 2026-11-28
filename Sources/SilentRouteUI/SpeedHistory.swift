@@ -1,8 +1,8 @@
 import Foundation
 
-/// The speed of a whole VPN session, a sample a second, for Monitor's
-/// chart: kept from the moment the VPN is turned on (across reconnects),
-/// whether or not anyone looks, so the chart can show what happened before
+/// The VPN's speed, a sample a second, for Monitor's chart: kept from where
+/// the uptime counts (this connection, or turning the VPN on, as chosen in
+/// Settings), whether or not anyone looks, so the chart can show what happened before
 /// Monitor was opened. It comes from the stream the app reads anyway while
 /// connected; nothing extra is asked of sing-box.
 public struct SpeedHistory: Equatable, Sendable {

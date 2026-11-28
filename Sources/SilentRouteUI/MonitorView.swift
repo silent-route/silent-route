@@ -29,7 +29,7 @@ struct MonitorView: View {
     static let downColor = Color.purple
     static let upColor = Color.teal
 
-    /// How much of the session the chart shows.
+    /// How much of the recorded speed the chart shows.
     enum ChartRange: String, CaseIterable, Identifiable {
         case minutes = "2 Min", hour = "1 Hour", session = "Session"
         var id: Self { self }
@@ -123,7 +123,7 @@ struct MonitorView: View {
                     .controlSize(.small)
                     .fixedSize()
                     .gridColumnAlignment(.trailing)
-                    .help("How much of this VPN session the chart shows — it is recorded from the moment the VPN was turned on")
+                    .help("How much the chart shows. Session starts where the connection time does (Settings › General)")
                 }
             }
             .font(.callout)
@@ -145,8 +145,8 @@ struct MonitorView: View {
         }
     }
 
-    /// The session's speed, recorded from the moment the VPN was turned on
-    /// — also while Monitor was closed. A fixed span (two minutes, an hour)
+    /// The speed since the connection time's start (see SpeedHistory) —
+    /// also while Monitor was closed. A fixed span (two minutes, an hour)
     /// fills in from the right as data arrives, as in Activity Monitor.
     private var chart: some View {
         let points = model.history.points(within: range.seconds)

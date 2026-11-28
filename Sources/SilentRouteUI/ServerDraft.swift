@@ -60,6 +60,10 @@ struct ServerDraft: Equatable {
     /// SOCKS5: UDP through the proxy (see Proxy.udp).
     var proxyUDP = false
 
+    /// New servers start with it on: a failed handshake can get the
+    /// server's address blocked for a while, before anyone thinks of it.
+    var tlsFragment: TLSFragment? = .records
+
     var muxOn = false
     var muxKind: Multiplex.Kind = .h2mux
     var muxConnections = 4
@@ -80,6 +84,7 @@ struct ServerDraft: Equatable {
         port = String(t.server.port)
         if case .link(let l) = t.origin { sourceLink = l }
         sourceTunnel = t
+        tlsFragment = t.tlsFragment
         if let m = t.multiplex {
             muxOn = true
             muxKind = m.kind
@@ -229,6 +234,7 @@ struct ServerDraft: Equatable {
         }
         var t = Tunnel(id: id, name: trimmedName.isEmpty ? "\(h):\(p)" : trimmedName, server: Endpoint(host: h, port: p),
                        proto: protocolValue, origin: .manual)
+        if TLSFragment.isSupported(by: t.proto) { t.tlsFragment = tlsFragment }
         if muxOn, supportsMux {
             t.multiplex = Multiplex(kind: muxKind, maxConnections: muxConnections, padding: muxPadding)
         }

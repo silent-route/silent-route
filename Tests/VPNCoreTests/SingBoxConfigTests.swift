@@ -99,6 +99,29 @@ enum Fixtures {
         #expect(plain?.contains("multiplex") == false && plain?.contains("tls_fragment") == false)
     }
 
+    /// Split for TLS over TCP; Reality and Hysteria2 get nothing (sing-box
+    /// would not split them) and a warning.
+    @Test func tlsFragmentPerServer() throws {
+        let trojan = Tunnel(name: "TLS", server: Endpoint(host: "t.example.org", port: 443),
+                            proto: .trojan(Trojan(password: "pw", tls: TLS(serverName: "t.example.org"))))
+        var p = Fixtures.profile
+        p.tunnels.append(trojan)
+        for i in p.tunnels.indices { p.tunnels[i].tlsFragment = .records }
+        let outbounds = try #require(try SingBoxConfig.generate(p, env: Fixtures.env)["outbounds"]?.arrayValue)
+        func tls(_ t: Tunnel) -> JSON? {
+            outbounds.first { $0["tag"] == .string(SingBoxConfig.tag(t.id)) }?["tls"]
+        }
+        #expect(tls(trojan)?["record_fragment"] == true)
+        #expect(tls(Fixtures.vless)?["record_fragment"] == nil)
+        #expect(tls(Fixtures.h2)?["record_fragment"] == nil)
+        p.tunnels[2].tlsFragment = .packets
+        let packets = try #require(try SingBoxConfig.generate(p, env: Fixtures.env)["outbounds"]?.arrayValue)
+            .first { $0["tag"] == .string(SingBoxConfig.tag(trojan.id)) }?["tls"]
+        #expect(packets?["fragment"] == true && packets?["record_fragment"] == nil)
+        let warnings = Validation.check(p).filter { $0.severity == .warning }.map(\.tunnel)
+        #expect(Set(warnings.compactMap { $0 }) == [Fixtures.h2ID, Fixtures.vlessID])
+    }
+
     /// Profiles and .srprofile files from before these options still open.
     @Test func olderProfilesStillDecode() throws {
         let enc = JSONEncoder()
@@ -107,9 +130,13 @@ enum Fixtures {
         var routes = json["routes"] as! [[String: Any]]
         for i in routes.indices { routes[i]["fragmentTLS"] = nil }
         json["routes"] = routes
+        var tunnels = json["tunnels"] as! [[String: Any]]
+        for i in tunnels.indices { tunnels[i]["tlsFragment"] = nil }
+        json["tunnels"] = tunnels
         let p = try JSONDecoder().decode(Profile.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(p.mtu == nil)
         #expect(p.routes.allSatisfy { !$0.fragmentTLS })
+        #expect(p.tunnels.allSatisfy { $0.tlsFragment == nil })
     }
 
     @Test func geoNamesAreCheckedForForm() {

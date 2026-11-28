@@ -77,9 +77,9 @@ public final class AppModel {
     public private(set) var sessionBytes: Speed?
     private var sessionCarry = Speed(down: 0, up: 0)
     private var sessionKey: Date?
-    /// Speed over the whole session, for Monitor's chart (see SpeedHistory).
+    /// Speed since `uptimeSince`, for Monitor's chart (see SpeedHistory).
     public internal(set) var history = SpeedHistory()
-    /// The session `history` belongs to; a new one starts it afresh.
+    /// The start `history` counts from; a new one starts it afresh.
     private var historySession: Date?
 
     /// Where the uptime counts from, as chosen in Settings: this connection,
@@ -404,12 +404,11 @@ public final class AppModel {
                 total.up += (obj["uploadTotal"] as? NSNumber)?.int64Value ?? 0
             }
             self.sessionBytes = total
-            // The chart's history: kept for the whole session, across
-            // reconnects (a new sing-box run); a new session starts afresh.
-            let session = self.status.sessionSince ?? self.status.connectedSince
-            if session != self.historySession {
+            // The chart's history counts from where the uptime does: this
+            // connection, or the whole session across reconnects.
+            if self.uptimeSince != self.historySession {
                 self.history = SpeedHistory()
-                self.historySession = session
+                self.historySession = self.uptimeSince
             }
             await TrafficStream.run(port: api.port, secret: api.secret) { [weak self] s in
                 await MainActor.run {

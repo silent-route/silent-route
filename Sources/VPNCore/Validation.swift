@@ -70,6 +70,9 @@ public enum Validation {
                     error("server \"\(t.name)\": multiplexing needs 1–16 connections", tunnel: t.id)
                 }
             }
+            if t.tlsFragment != nil, !TLSFragment.isSupported(by: t.proto) {
+                warn("server \"\(t.name)\": the TLS handshake is split only for TLS over TCP without Reality, ignored", tunnel: t.id)
+            }
             if t.name.trimmingCharacters(in: .whitespaces).isEmpty { error("a server has no name", tunnel: t.id) }
             let host = t.server.host
             if IPNetwork.parseV4(host) == nil, IPNetwork.parseV6(host) == nil, !isValidDomain(host) {

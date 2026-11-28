@@ -125,9 +125,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Closing the window keeps the app (and its menu bar icon) running.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    /// Clicking the Dock icon brings the window back.
+    /// Clicking the Dock icon brings the window back: the update window
+    /// while an update runs (other windows may cover it), else the main one.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showMainWindow()
+        if let w = updateWindow, w.isVisible {
+            w.makeKeyAndOrderFront(nil)
+        } else {
+            showMainWindow()
+        }
         return true
     }
 
@@ -339,7 +344,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             w.titleVisibility = .hidden
             w.title = "Silent Route Update"
             w.isReleasedWhenClosed = false
-            w.level = .floating
             w.center()
             updateWindow = w
         }

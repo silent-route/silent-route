@@ -108,8 +108,8 @@ public struct SettingsView: View {
                 .pickerStyle(.radioGroup)
                 .labelsHidden()
                 Text(sessionCounter == .connection
-                     ? "The time and the traffic shown in the menu bar and the window count the current connection."
-                     : "The time and the traffic count the whole session, across reconnects and profile switches, until you turn the VPN off.")
+                     ? "The time, the traffic and Monitor's chart count the current connection."
+                     : "The time, the traffic and Monitor's chart count the whole session, across reconnects and profile switches, until you turn the VPN off.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

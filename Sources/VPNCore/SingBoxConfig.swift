@@ -538,6 +538,10 @@ public enum SingBoxConfig {
             if let t = v.tls { o["tls"] = tls(t) }
             if let x = transport(v.transport) { o["transport"] = x }
         }
+        if let f = t.tlsFragment, TLSFragment.isSupported(by: t.proto), case .object(var x)? = o["tls"] {
+            x[f == .records ? "record_fragment" : "fragment"] = true
+            o["tls"] = .object(x)
+        }
         if let m = t.multiplex, Multiplex.isSupported(by: t.proto) {
             o["multiplex"] = ["enabled": true, "protocol": .string(m.kind.rawValue),
                               "max_connections": .int(m.maxConnections), "padding": .bool(m.padding)]

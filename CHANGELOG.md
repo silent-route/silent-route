@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.5-beta
+
+- The update window no longer stays above other windows. Clicking the Dock icon while an update runs brings it back.
+- **Split the handshake** for servers with ordinary TLS (VLESS, Trojan, VMess, HTTPS proxies), in the server's Security section: the first TLS message goes out in parts, so a network that blocks by server name does not see it. On by default for servers added from now on, in TLS records; servers already in profiles keep working as before. Reality and Hysteria2 do not have it: sing-box does not split their handshake.
+- **Monitor's chart follows Connection time and traffic** (Settings › General): with *Start again after a reconnect* the chart's *Session* starts at the current connection too. Before, it always counted from turning the VPN on.
+
 ## 1.6.4-beta
 
 Everything that changed since 1.0.1-beta. The betas in between were withdrawn.
