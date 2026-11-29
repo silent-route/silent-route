@@ -40,7 +40,10 @@ final class StatusPanel: NSPanel, NSWindowDelegate {
         isReleasedWhenClosed = false
         becomesKeyOnlyIfNeeded = false
         animationBehavior = .utilityWindow
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        // Opens on the desktop in front, and stays on it: one on every
+        // desktop would show on the next one during a swipe, until the
+        // switch is over and it closes.
+        collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .transient, .ignoresCycle]
         let (background, glass) = Self.background(around: host)
         contentView = background
         self.glass = glass

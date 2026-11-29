@@ -116,7 +116,6 @@ public actor Controller {
     /// Servers counted as answering, and each one's failed checks in a row.
     private var alive: Set<UUID> = []
     private var strikes: [UUID: Int] = [:]
-    /// Consecutive checks in which no exit at all answered.
     /// The session log's ear: told when a session begins and ends and what
     /// happens in between. Set by the daemon; nil in most tests.
     private var sessionHook: (@Sendable (SessionEvent) -> Void)?

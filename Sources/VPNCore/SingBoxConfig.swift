@@ -352,7 +352,7 @@ public enum SingBoxConfig {
 
     // MARK: - Route rules
 
-    /// One profile rule as one sing-box rule. Each condition group becomes a
+    /// One profile rule as one sing-box rule.
     /// What it is about — its sites and addresses, its apps — each match on
     /// its own (OR); ports and protocol narrow that down (AND). Explicit
     /// logical rules, so the meaning never depends on sing-box's implicit

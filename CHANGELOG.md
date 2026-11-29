@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.6-beta
+
+- The menu bar panel no longer flashes on the next desktop when you swipe to another one while it is open.
+- A server added from a link keeps everything the link sets, including what the form has no field for: a Shadowsocks plugin (obfs, v2ray-plugin), Hysteria2 upload and download speeds, the VMess alter ID. Before, they were dropped on adding, and editing a server dropped them too.
+- Reality picked for a VLESS server no longer stays in the server when another protocol is chosen afterwards.
+- The speed in the menu bar panel and Monitor no longer stays empty for a whole connection when the first request for it fails.
+
 ## 1.6.5-beta
 
 - The update window no longer stays above other windows. Clicking the Dock icon while an update runs brings it back.

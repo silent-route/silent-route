@@ -69,6 +69,14 @@ struct ServerDraft: Equatable {
     var muxConnections = 4
     var muxPadding = false
 
+    /// What a link can set but the form has no field for: kept as it came,
+    /// so adding or editing the server does not lose it.
+    var ssPlugin: String?
+    var ssPluginOptions: String?
+    var upMbps: Int?
+    var downMbps: Int?
+    var vmessAlterID = 0
+
     /// Kept from the server being edited.
     var id = UUID()
     /// The link the fields came from, kept as the origin if nothing changed.
@@ -116,6 +124,8 @@ struct ServerDraft: Equatable {
             password = h.password
             obfsPassword = h.obfsPassword ?? ""
             portHopping = h.serverPorts.joined(separator: ", ")
+            upMbps = h.upMbps
+            downMbps = h.downMbps
             takeTLS(h.tls)
         case .vless(let v):
             kind = .tunnel; proto = .vless
@@ -132,10 +142,13 @@ struct ServerDraft: Equatable {
             kind = .tunnel; proto = .shadowsocks
             ssMethod = s.method
             password = s.password
+            ssPlugin = s.plugin
+            ssPluginOptions = s.pluginOptions
         case .vmess(let v):
             kind = .tunnel; proto = .vmess
             uuid = v.uuid.uuidString.lowercased()
             vmessSecurity = v.security
+            vmessAlterID = v.alterID
             takeTLS(v.tls)
             takeTransport(v.transport)
         case .proxy(let p):
@@ -189,7 +202,9 @@ struct ServerDraft: Equatable {
             TLS(serverName: clean(sni) ?? (IPNetwork(h) == nil ? h : nil),
                 alpn: alpn.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
                 insecure: insecure, fingerprint: clean(fingerprint),
-                reality: security == .reality ? .init(publicKey: realityKey.trimmingCharacters(in: .whitespaces),
+                // Reality is VLESS's alone: a choice left from VLESS before
+                // another protocol was picked does not carry over.
+                reality: security == .reality && proto == .vless ? .init(publicKey: realityKey.trimmingCharacters(in: .whitespaces),
                                                       shortID: realityShortID.trimmingCharacters(in: .whitespaces)) : nil)
         }
         func uuidValue() throws(Problem) -> UUID {
@@ -219,16 +234,19 @@ struct ServerDraft: Equatable {
             switch proto {
             case .hysteria2:
                 protocolValue = .hysteria2(Hysteria2(password: password, obfsPassword: clean(obfsPassword), tls: tls(),
-                                                     serverPorts: portHopping.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }))
+                                                     serverPorts: portHopping.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+                                                     upMbps: upMbps, downMbps: downMbps))
             case .vless:
                 protocolValue = .vless(VLESS(uuid: try uuidValue(), flow: clean(flow), tls: security == .none ? nil : tls(),
                                              transport: transportValue()))
             case .trojan:
                 protocolValue = .trojan(Trojan(password: password, tls: security == .none ? nil : tls(), transport: transportValue()))
             case .shadowsocks:
-                protocolValue = .shadowsocks(Shadowsocks(method: ssMethod, password: password))
+                protocolValue = .shadowsocks(Shadowsocks(method: ssMethod, password: password,
+                                                         plugin: ssPlugin, pluginOptions: ssPluginOptions))
             case .vmess:
-                protocolValue = .vmess(VMess(uuid: try uuidValue(), security: vmessSecurity, tls: security == .none ? nil : tls(),
+                protocolValue = .vmess(VMess(uuid: try uuidValue(), security: vmessSecurity, alterID: vmessAlterID,
+                                             tls: security == .none ? nil : tls(),
                                              transport: transportValue()))
             }
         }

@@ -387,7 +387,13 @@ public final class AppModel {
     private func startTraffic() {
         guard traffic == nil else { return }
         traffic = Task { [weak self] in
-            guard let self, let r = try? await self.backend.send(.apiCredentials), let api = r.api else { return }
+            guard let self else { return }
+            guard let r = try? await self.backend.send(.apiCredentials), let api = r.api else {
+                // Asked again on the next refresh, not left without speed
+                // for the rest of the connection.
+                if !Task.isCancelled { self.traffic = nil }
+                return
+            }
             // The same count as the uptime: a new one, or a new sing-box run
             // of the same session.
             if self.uptimeSince != self.sessionKey {
@@ -422,7 +428,8 @@ public final class AppModel {
                     }
                 }
             }
-            await MainActor.run { self.traffic = nil }
+            // Stopped from outside, `traffic` may be a newer stream's already.
+            if !Task.isCancelled { self.traffic = nil }
         }
     }
 
