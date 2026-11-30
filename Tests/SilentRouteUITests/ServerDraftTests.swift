@@ -18,6 +18,30 @@ import VPNCore
         #expect(built.origin == t.origin)
     }
 
+    /// The fields for them: a plugin turned off takes its options along;
+    /// a speed or an alter ID that is not a number is refused, not dropped.
+    @Test func linkOnlyFieldsAreEditable() throws {
+        var d = ServerDraft(try LinkParser.parse(
+            "ss://YWVzLTI1Ni1nY206c2VjcmV0@203.0.113.5:8388?plugin=obfs-local%3Bobfs%3Dhttp#SS").tunnel)
+        #expect(d.ssPlugin == "obfs-local" && d.ssPluginOptions == "obfs=http")
+        d.ssPlugin = ""
+        guard case .shadowsocks(let s) = try d.build().proto else { Issue.record("not Shadowsocks"); return }
+        #expect(s.plugin == nil && s.pluginOptions == nil)
+
+        d.proto = .hysteria2
+        d.password = "p"
+        d.upMbps = "fast"
+        #expect(throws: ServerDraft.Problem.self) { try d.build() }
+        d.upMbps = " 50 "
+        guard case .hysteria2(let h) = try d.build().proto else { Issue.record("not Hysteria2"); return }
+        #expect(h.upMbps == 50 && h.downMbps == nil)
+
+        d.proto = .vmess
+        d.uuid = "1b2c3d4e-0000-4000-8000-123456789abc"
+        d.vmessAlterID = "-1"
+        #expect(throws: ServerDraft.Problem.self) { try d.build() }
+    }
+
     /// Reality chosen for VLESS, then another protocol picked: no Reality.
     @Test func realityStaysWithVLESS() throws {
         var d = ServerDraft()

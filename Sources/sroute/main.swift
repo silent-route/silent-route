@@ -24,8 +24,9 @@ usage: sroute <command>
   add <link|->            add a tunnel or proxy to the active profile
                           ("-" reads stdin); routes are edited in the app
   remove <name>           delete a server from the active profile
-  probe <link|->          check a server through a temporary local proxy;
-                          the current connection is not touched
+  probe <link|->          check a server the way the VPN reaches it (by the
+                          helper, past the tunnel and the kill switch); the
+                          current connection is not touched
   parse <link|->          show what a link turns into (secrets masked)
   diag                    local checks: interfaces, routes, other VPNs
 
@@ -252,9 +253,18 @@ case ("parse", 2):
 case ("probe", 2):
     let r = parseOrFail(readArgument(args[1]))
     for w in r.warnings { print("⚠️  \(w)") }
-    print("Checking \(r.tunnel.name) through a temporary local proxy…")
+    print("Checking \(r.tunnel.name)…")
     do {
-        let rep = try await Probe.run(r.tunnel, singBox: singBoxPath())
+        // The helper checks it as the VPN reaches it: past the tunnel, let
+        // out by the kill switch. Run here instead, the check would be
+        // blocked by that kill switch. Without a helper, nothing blocks.
+        let rep: Probe.Report
+        if FileManager.default.fileExists(atPath: Paths().helper.path) {
+            guard let report = await send(.probe(r.tunnel)).probe else { fail("the helper did not answer the check") }
+            rep = report
+        } else {
+            rep = try await Probe.run(r.tunnel, singBox: singBoxPath())
+        }
         print("✅ Exit: \(rep.ip) — \([rep.city, rep.country].compactMap { $0 }.joined(separator: ", "))")
         if let org = rep.org { print("   Network: \(org)") }
         print("   Answer in \(rep.latencyMs) ms")

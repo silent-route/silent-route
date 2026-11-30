@@ -1,10 +1,13 @@
 # Changelog
 
-## 1.6.6-beta
+## 1.6.7-beta
 
-- The menu bar panel no longer flashes on the next desktop when you swipe to another one while it is open.
-- A server added from a link keeps everything the link sets, including what the form has no field for: a Shadowsocks plugin (obfs, v2ray-plugin), Hysteria2 upload and download speeds, the VMess alter ID. Before, they were dropped on adding, and editing a server dropped them too.
+Replaces 1.6.6-beta, which was withdrawn.
+
+- **The server form has every setting a link can carry.** Shadowsocks: *Plugin* (obfs-local, v2ray-plugin) and its options. Hysteria2: upload and download speed. VMess: alter ID. Before, the app read them from a link but had no fields for them, and they were lost when the server was added or edited.
 - Reality picked for a VLESS server no longer stays in the server when another protocol is chosen afterwards.
+- `sroute probe` checks a server through the helper, the way the VPN reaches it, as the app does. Before, it ran on its own and with the kill switch on always reported that the server does not answer.
+- The menu bar panel no longer flashes on the next desktop when you swipe to another one while it is open.
 - The speed in the menu bar panel and Monitor no longer stays empty for a whole connection when the first request for it fails.
 
 ## 1.6.5-beta

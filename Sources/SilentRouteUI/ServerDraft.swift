@@ -53,7 +53,17 @@ struct ServerDraft: Equatable {
     var transportHost = ""
     var serviceName = ""
     var ssMethod = "2022-blake3-aes-128-gcm"
+    /// "" for none; else one of `ssPlugins`.
+    var ssPlugin = ""
+    var ssPluginOptions = ""
+    /// Hysteria2's speeds, in Mbps; empty: not given.
+    var upMbps = ""
+    var downMbps = ""
     var vmessSecurity = "auto"
+    var vmessAlterID = "0"
+
+    /// The SIP003 plugins sing-box has.
+    static let ssPlugins = ["obfs-local", "v2ray-plugin"]
 
     var proxyType: ProxyType = .socks5
     var username = ""
@@ -68,14 +78,6 @@ struct ServerDraft: Equatable {
     var muxKind: Multiplex.Kind = .h2mux
     var muxConnections = 4
     var muxPadding = false
-
-    /// What a link can set but the form has no field for: kept as it came,
-    /// so adding or editing the server does not lose it.
-    var ssPlugin: String?
-    var ssPluginOptions: String?
-    var upMbps: Int?
-    var downMbps: Int?
-    var vmessAlterID = 0
 
     /// Kept from the server being edited.
     var id = UUID()
@@ -124,8 +126,8 @@ struct ServerDraft: Equatable {
             password = h.password
             obfsPassword = h.obfsPassword ?? ""
             portHopping = h.serverPorts.joined(separator: ", ")
-            upMbps = h.upMbps
-            downMbps = h.downMbps
+            upMbps = h.upMbps.map(String.init) ?? ""
+            downMbps = h.downMbps.map(String.init) ?? ""
             takeTLS(h.tls)
         case .vless(let v):
             kind = .tunnel; proto = .vless
@@ -142,13 +144,13 @@ struct ServerDraft: Equatable {
             kind = .tunnel; proto = .shadowsocks
             ssMethod = s.method
             password = s.password
-            ssPlugin = s.plugin
-            ssPluginOptions = s.pluginOptions
+            ssPlugin = s.plugin ?? ""
+            ssPluginOptions = s.pluginOptions ?? ""
         case .vmess(let v):
             kind = .tunnel; proto = .vmess
             uuid = v.uuid.uuidString.lowercased()
             vmessSecurity = v.security
-            vmessAlterID = v.alterID
+            vmessAlterID = String(v.alterID)
             takeTLS(v.tls)
             takeTransport(v.transport)
         case .proxy(let p):
@@ -213,6 +215,11 @@ struct ServerDraft: Equatable {
             }
             return u
         }
+        func mbps(_ s: String, _ what: String) throws(Problem) -> Int? {
+            guard let t = clean(s) else { return nil }
+            guard let n = Int(t), n > 0 else { throw Problem(message: "The \(what) speed is a whole number of Mbps") }
+            return n
+        }
         func transportValue() -> Transport {
             switch transport {
             case .tcp: .tcp
@@ -233,19 +240,24 @@ struct ServerDraft: Equatable {
         case .tunnel:
             switch proto {
             case .hysteria2:
+                let up = try mbps(upMbps, "upload"), down = try mbps(downMbps, "download")
                 protocolValue = .hysteria2(Hysteria2(password: password, obfsPassword: clean(obfsPassword), tls: tls(),
                                                      serverPorts: portHopping.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
-                                                     upMbps: upMbps, downMbps: downMbps))
+                                                     upMbps: up, downMbps: down))
             case .vless:
                 protocolValue = .vless(VLESS(uuid: try uuidValue(), flow: clean(flow), tls: security == .none ? nil : tls(),
                                              transport: transportValue()))
             case .trojan:
                 protocolValue = .trojan(Trojan(password: password, tls: security == .none ? nil : tls(), transport: transportValue()))
             case .shadowsocks:
-                protocolValue = .shadowsocks(Shadowsocks(method: ssMethod, password: password,
-                                                         plugin: ssPlugin, pluginOptions: ssPluginOptions))
+                let plugin = ssPlugin.isEmpty ? nil : ssPlugin
+                protocolValue = .shadowsocks(Shadowsocks(method: ssMethod, password: password, plugin: plugin,
+                                                         pluginOptions: plugin == nil ? nil : clean(ssPluginOptions)))
             case .vmess:
-                protocolValue = .vmess(VMess(uuid: try uuidValue(), security: vmessSecurity, alterID: vmessAlterID,
+                guard let alterID = Int(vmessAlterID.trimmingCharacters(in: .whitespaces)), (0...65535).contains(alterID) else {
+                    throw Problem(message: "The alter ID is a number from 0 to 65535")
+                }
+                protocolValue = .vmess(VMess(uuid: try uuidValue(), security: vmessSecurity, alterID: alterID,
                                              tls: security == .none ? nil : tls(),
                                              transport: transportValue()))
             }

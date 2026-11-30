@@ -114,7 +114,7 @@ Every connection Silent Route makes or lets through, DNS and the Wi-Fi login are
 sroute status | up | down | panic
 sroute profiles | use <profile> | import <file> | export <profile> <file> | delete <profile>
 sroute servers | routes | add <link> | remove <name>
-sroute probe <link>    test a server through a temporary local proxy
+sroute probe <link>    check a server the way the VPN reaches it
 sroute diag            interfaces, routes, other active VPNs
 ```
 

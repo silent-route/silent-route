@@ -168,6 +168,16 @@ struct AddServerSheet: View {
                 SecureField("Obfuscation password", text: $draft.obfsPassword, prompt: Text("salamander, optional"))
                 TextField("Port hopping", text: $draft.portHopping, prompt: Text("e.g. 20000:30000, optional"))
             }
+            Section {
+                TextField("Upload, Mbps", text: $draft.upMbps, prompt: Text("optional"))
+                TextField("Download, Mbps", text: $draft.downMbps, prompt: Text("optional"))
+            } header: {
+                Text("Speed")
+            } footer: {
+                Text("Your connection's real speed, if the server asks for it. Empty: Hysteria2 finds the speed by itself.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             tlsSection(choice: false)
         case .vless:
             Section("VLESS") {
@@ -190,12 +200,30 @@ struct AddServerSheet: View {
                 }
                 SecureField("Password", text: $draft.password)
             }
+            Section {
+                Picker("Plugin", selection: $draft.ssPlugin) {
+                    Text("None").tag("")
+                    ForEach(ServerDraft.ssPlugins, id: \.self) { Text($0).tag($0) }
+                }
+                TextField("Plugin options", text: $draft.ssPluginOptions, prompt: Text("e.g. obfs=http;obfs-host=example.com"))
+                    .disabled(draft.ssPlugin.isEmpty)
+            } header: {
+                Text("Plugin")
+            } footer: {
+                Text("Only if the server uses one. Options are written as the server's settings give them.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         case .vmess:
             Section("VMess") {
                 TextField("UUID", text: $draft.uuid)
                 Picker("Encryption", selection: $draft.vmessSecurity) {
                     ForEach(["auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"], id: \.self) { Text($0).tag($0) }
                 }
+                TextField("Alter ID", text: $draft.vmessAlterID, prompt: Text("0"))
+                Text("0 for current servers. Older servers may need the number from their settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             tlsSection(choice: true)
             transportSection

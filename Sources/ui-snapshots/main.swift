@@ -222,6 +222,16 @@ MainActor.assumeIsolated {
     render("window-not-installed", size: win, MainWindow(model: model(.notInstalled, VPNStatus(phase: .off), ProfileLibrary())))
     render("add-tunnel", AddServerSheet(draft: ServerDraft(de), isNew: false, profile: home) { _ in })
     render("add-proxy", AddServerSheet(draft: ServerDraft(kind: .proxy), isNew: true, profile: home) { _ in })
+    // The fields each protocol has of its own.
+    for (name, link) in [
+        ("add-shadowsocks", "ss://YWVzLTI1Ni1nY206c2VjcmV0@203.0.113.5:8388?plugin=obfs-local%3Bobfs%3Dhttp#Shadowsocks"),
+        ("add-hysteria2", "hysteria2://pass@example.com:443?upmbps=50&downmbps=200#Hysteria2"),
+        ("add-vmess", "vmess://" + Data(#"{"ps":"VMess","add":"example.com","port":"443","id":"1b2c3d4e-0000-4000-8000-123456789abc","aid":"64","tls":"tls"}"#.utf8).base64EncodedString()),
+    ] {
+        if let t = try? LinkParser.parse(link).tunnel {
+            render(name, AddServerSheet(draft: ServerDraft(t), isNew: false, profile: home) { _ in })
+        }
+    }
     render("settings", SettingsView(model: model(.ready, connected)))
     render("update-helper", UpdateWindowView(updater: .preview(stage: .helper, step: "Updating the helper — enter your password if macOS asks…"),
                                              model: model(.ready, connected)))
