@@ -77,7 +77,7 @@ struct SingBoxCheckTests {
         #expect(!(try SingBoxConfig.generate(Fixtures.profile, env: SingBox.env).text.contains("dns-in")))
     }
 
-    /// MTU, multiplexing and TLS fragmentation as sing-box 1.13 expects them.
+    /// MTU, multiplexing and TLS fragmentation as sing-box expects them.
     @Test func advancedOptionsAreAccepted() throws {
         let uuid = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let tls = TLS(serverName: "s.example.org")
@@ -104,6 +104,47 @@ struct SingBoxCheckTests {
         #expect(json.text.contains("\"tls_fragment\" : true"))
         #expect(json.text.contains("\"multiplex\""))
         try SingBox.check(json)
+    }
+
+    /// Some of what sing-box is about to drop it says only once it runs, not
+    /// in `check`: the full config is run for a moment, its TUN swapped for
+    /// a local proxy (a TUN needs root), and must start without a warning.
+    /// A list of sites and addresses is in it, its names apart for DNS — in
+    /// a DNS rule, the whole list is what sing-box warns about (checked
+    /// too, so the test is known to see it).
+    @Test func fullProfileRunsWithoutWarnings() throws {
+        let dir = SingBox.work.appendingPathComponent("run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = Data(#"{"version":3,"rules":[{"domain_suffix":["cn"]},{"ip_cidr":["203.0.113.0/24"]}]}"#.utf8)
+        guard case .part(let names) = RuleLists.names(source) else { Issue.record("no names part"); return }
+        for (name, data) in [("mixed", source), ("names", names)] {
+            try data.write(to: dir.appendingPathComponent("\(name).json"))
+            try SingBox.run(["rule-set", "compile", dir.appendingPathComponent("\(name).json").path,
+                             "-o", dir.appendingPathComponent("\(name).srs").path])
+        }
+        let mixedURL = try #require(Profile.domesticLists.first { $0.name == "geosite-cn" }?.url)
+        var env = SingBox.env
+        env.clashAPIPort = SingBox.freePort()
+        env.captive = .init(port: SingBox.freePort(), username: "sr", password: "secret")
+        env.lists[mixedURL] = .init(path: dir.appendingPathComponent("mixed.srs").path,
+                                    namesPath: dir.appendingPathComponent("names.srs").path)
+        let out = try SingBox.runBriefly(SingBoxConfig.generate(Fixtures.profile, env: env), in: dir)
+        #expect(!out.contains("WARN") && !out.contains("ERROR") && !out.contains("FATAL"), "sing-box said: \(out)")
+
+        env.lists[mixedURL]?.namesPath = dir.appendingPathComponent("mixed.srs").path
+        #expect(try SingBox.runBriefly(SingBoxConfig.generate(Fixtures.profile, env: env), in: dir).contains("WARN"))
+    }
+
+    /// The helper's server check, as it runs: no TUN, nothing to swap.
+    @Test func probeRunsWithoutWarnings() throws {
+        let dir = SingBox.work.appendingPathComponent("run-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for t in [Fixtures.h2, Fixtures.vless] {
+            let out = try SingBox.runBriefly(SingBoxConfig.probe(t, socksPort: SingBox.freePort(), auth: ("probe", "secret"), direct: true), in: dir)
+            #expect(!out.contains("WARN") && !out.contains("ERROR") && !out.contains("FATAL"), "sing-box said: \(out)")
+        }
     }
 
     /// Random profiles: any combination the model allows must be a config
@@ -214,12 +255,57 @@ enum SingBox {
         return out
     }
 
+    static func freePort() -> UInt16 {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, len) == 0 && getsockname(fd, $0, &len) == 0 }
+        }
+        return UInt16(bigEndian: addr.sin_port)
+    }
+
+    /// Runs a config for two seconds, its TUN inbound (if any) swapped for
+    /// a local proxy with the same tag; what sing-box printed. Fails if it
+    /// stopped by itself.
+    static func runBriefly(_ config: JSON, in dir: URL) throws -> String {
+        var obj = try #require(try JSONSerialization.jsonObject(with: config.encoded()) as? [String: Any])
+        var inbounds = try #require(obj["inbounds"] as? [[String: Any]])
+        if let tun = inbounds.firstIndex(where: { $0["type"] as? String == "tun" }) {
+            inbounds[tun] = ["type": "mixed", "tag": inbounds[tun]["tag"] ?? "", "listen": "127.0.0.1", "listen_port": Int(freePort())]
+        }
+        obj["inbounds"] = inbounds
+        let file = dir.appendingPathComponent("run-\(UUID().uuidString).json")
+        try JSONSerialization.data(withJSONObject: obj).write(to: file)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path!)
+        p.arguments = ["run", "-c", file.path, "-D", dir.path, "--disable-color"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        try p.run()
+        Thread.sleep(forTimeInterval: 2)
+        let stoppedByItself = !p.isRunning
+        p.terminate()
+        p.waitUntilExit()
+        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        if stoppedByItself { throw CheckFailed(description: "sing-box stopped by itself: \(out)") }
+        return out
+    }
+
     static func check(_ config: JSON) throws {
         let file = work.appendingPathComponent("config-\(UUID().uuidString).json")
         try config.encoded().write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
         do {
-            try run(["check", "-c", file.path])
+            // Accepted is not enough: a warning names an option sing-box is
+            // about to drop (deprecated), which a later version refuses.
+            let out = try run(["check", "-c", file.path])
+            if out.contains("WARN") { Issue.record("sing-box warns: \(out)\n\(config.text)") }
         } catch let e as CheckFailed {
             Issue.record("sing-box check failed: \(e.description)\n\(config.text)")
         }

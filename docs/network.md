@@ -66,6 +66,8 @@ How sing-box answers each name:
 | Anything else | Like *Everything else* | Its server, or direct |
 | A server's own host name | The profile's direct resolver | Direct (a tunnel cannot resolve its own server) |
 
+A list takes part by its sites only. Its addresses (`IP-CIDR` lines, a country's networks) never decide where a name is asked: in a DNS rule, sing-box would ask the route's resolver for every name, in the list or not, just to compare the answer with them — for a direct route, past the tunnel. The helper keeps each list of sites and addresses with a second file of its sites alone, for DNS. Traffic is still matched against the whole list.
+
 Names ending in `.local` (AirPrint, AirDrop, Bonjour) use multicast DNS, not DNS, and keep working as usual.
 
 ## Network changes and sleep

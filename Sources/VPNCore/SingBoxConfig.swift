@@ -41,12 +41,13 @@ public enum SingBoxConfig {
     public struct LocalList: Codable, Hashable, Sendable {
         /// Absolute.
         public var path: String
-        /// It matches names, not only addresses: it also decides which DNS
-        /// server a name is asked of.
-        public var matchesNames: Bool
-        public init(path: String, matchesNames: Bool) {
+        /// Its names alone, compiled (absolute): they also decide which DNS
+        /// server a name is asked of. `path` itself when the list has
+        /// nothing else; nil when it has no names (`RuleLists.Names`).
+        public var namesPath: String?
+        public init(path: String, namesPath: String?) {
             self.path = path
-            self.matchesNames = matchesNames
+            self.namesPath = namesPath
         }
     }
 
@@ -110,7 +111,8 @@ public enum SingBoxConfig {
     // MARK: - Full config
 
     public static func generate(_ profile: Profile, env: Environment) throws(Failure) -> JSON {
-        guard env.cacheFile.hasPrefix("/"), env.lists.values.allSatisfy({ $0.path.hasPrefix("/") }) else {
+        guard env.cacheFile.hasPrefix("/"),
+              env.lists.values.allSatisfy({ $0.path.hasPrefix("/") && $0.namesPath?.hasPrefix("/") != false }) else {
             throw .badEnvironment("paths must be absolute")
         }
         let errors = Validation.check(profile)
@@ -183,6 +185,14 @@ public enum SingBoxConfig {
             }
             ruleSets.append(["type": "local", "tag": .string(RuleLists.tag(name)), "format": "binary", "path": .string(file.path)])
         }
+        // The names alone of mixed lists, for the DNS rules (see `dns`).
+        for r in routes where mirroredInDNS(r) {
+            for case .list(let name) in r.conditions.destinations {
+                guard let names = namesSet(name, profile, env), names.tag != RuleLists.tag(name),
+                      !ruleSets.contains(where: { $0["tag"] == .string(names.tag) }) else { continue }
+                ruleSets.append(["type": "local", "tag": .string(names.tag), "format": "binary", "path": .string(names.path)])
+            }
+        }
 
         var route: [String: JSON] = [
             "rules": .array(routeRules),
@@ -202,6 +212,10 @@ public enum SingBoxConfig {
                 "mtu": .int(profile.mtu ?? 9000),
                 "auto_route": true,
                 "stack": "gvisor",
+                // macOS's DNS is the helper's to set and put back (SystemDNS),
+                // also after a crash. sing-box would set its own on the TUN,
+                // which nothing restores if it dies.
+                "dns_mode": "disabled",
             ]] + (env.captive.map { c -> [JSON] in [[
                 "type": "mixed", "tag": .string(captiveTag),
                 "listen": "127.0.0.1", "listen_port": .int(Int(c.port)),
@@ -220,6 +234,18 @@ public enum SingBoxConfig {
                 ],
             ],
         ]
+    }
+
+    /// A route whose sites also decide which DNS server their names are
+    /// asked of: not one that ports or a protocol narrow — a DNS query does
+    /// not carry the port of the connection that will follow.
+    static func mirroredInDNS(_ r: Route) -> Bool { r.conditions.ports.isEmpty && r.conditions.network == nil }
+
+    /// A list's names as a rule-set: its tag and file; nil without names.
+    static func namesSet(_ name: String, _ profile: Profile, _ env: Environment) -> (tag: String, path: String)? {
+        guard let url = profile.lists.first(where: { $0.name == name })?.url, let file = env.lists[url],
+              let names = file.namesPath else { return nil }
+        return names == file.path ? (RuleLists.tag(name), names) : (RuleLists.namesTag(name), names)
     }
 
     static func usedLists(_ routes: [Route]) -> [String] {
@@ -288,16 +314,14 @@ public enum SingBoxConfig {
             return t
         }
 
-        // A route's sites are mirrored unless ports or a protocol narrow
-        // them: a DNS query does not carry the port of the connection that
-        // will follow. Its apps do not matter — its sites match from any
+        // A route's sites are mirrored (see `mirroredInDNS`), lists by their
+        // names alone. Its apps do not matter — its sites match from any
         // app (and the query comes from mDNSResponder anyway).
-        for r in routes where r.conditions.ports.isEmpty && r.conditions.network == nil {
+        for r in routes where mirroredInDNS(r) {
             var domains = domainFields(r.conditions.destinations)
             let sites = r.conditions.destinations.compactMap { d -> String? in
-                guard case .list(let n) = d, let url = profile.lists.first(where: { $0.name == n })?.url,
-                      env.lists[url]?.matchesNames == true else { return nil }
-                return RuleLists.tag(n)
+                guard case .list(let n) = d else { return nil }
+                return namesSet(n, profile, env)?.tag
             }
             if !sites.isEmpty { domains["rule_set"] = .strings(sites) }
             guard !domains.isEmpty else { continue }
@@ -327,7 +351,6 @@ public enum SingBoxConfig {
             "rules": .array(dnsRules),
             "final": .string(final),
             "strategy": "ipv4_only",
-            "independent_cache": true,
         ]
     }
 

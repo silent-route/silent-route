@@ -235,7 +235,7 @@ struct Harness {
         }
         let env = SingBoxConfig.Environment(cacheFile: "/tmp/cache.db", clashAPIPort: 19090, clashAPISecret: "",
                                             lists: Dictionary(uniqueKeysWithValues: Profile.domesticLists.map {
-                                                ($0.url, .init(path: "/tmp/rules/\($0.name).srs", matchesNames: false))
+                                                ($0.url, .init(path: "/tmp/rules/\($0.name).srs", namesPath: nil))
                                             }))
         var options = Controller.Options(singBoxGroup: 4242, configEnvironment: env)
         options.captivePort = captivePort

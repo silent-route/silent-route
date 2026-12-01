@@ -71,6 +71,7 @@ enum Daemon {
         // Lists: every one on disk checked once a day.
         Task {
             await lists.removeLegacy()
+            await lists.upgrade()
             while true {
                 await lists.refreshStale()
                 try? await Task.sleep(for: .seconds(3600))

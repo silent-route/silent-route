@@ -81,9 +81,67 @@ import Testing
         #expect(rules.contains { $0["domain"] == ["exact.example"] })
         #expect(rules.contains { $0["domain_keyword"] == ["tube"] })
         #expect(rules.contains { $0["ip_cidr"] == ["10.0.0.0/8", "203.0.113.0/24"] })
-        #expect(RuleLists.matchesNames(src))
-        #expect(!RuleLists.matchesNames(try #require(RuleLists.sourceFromText(Data("1.2.3.0/24".utf8)))))
+        #expect(RuleLists.names(src) != .none)
+        #expect(RuleLists.names(try #require(RuleLists.sourceFromText(Data("1.2.3.0/24".utf8)))) == .none)
         #expect(RuleLists.sourceFromText(Data("<html><body>Not found</body></html>".utf8)) == nil)
+    }
+}
+
+/// A list's names alone choose the DNS server: in a DNS rule its addresses
+/// would send every other name to the list's server as well.
+@Suite struct ListNamesTests {
+    func rules(_ n: RuleLists.Names) throws -> [[String: Any]] {
+        guard case .part(let d) = n else { Issue.record("not a part: \(n)"); return [] }
+        let obj = try #require(try JSONSerialization.jsonObject(with: d) as? [String: Any])
+        #expect(obj["version"] as? Int == 3)
+        return try #require(obj["rules"] as? [[String: Any]])
+    }
+
+    @Test func kinds() throws {
+        func src(_ rules: String) -> Data { Data(#"{"version":3,"rules":[\#(rules)]}"#.utf8) }
+        #expect(RuleLists.names(src(#"{"ip_cidr":["10.0.0.0/8"]}"#)) == .none)
+        #expect(RuleLists.names(src(#"{"domain_suffix":["a.example"]},{"domain_regex":["^b"]}"#)) == .whole)
+        #expect(RuleLists.names(Data("not json".utf8)) == .none)
+
+        // A rule's addresses go, its names and other fields stay.
+        let mixed = try rules(RuleLists.names(src(
+            #"{"domain_suffix":["a.example"],"ip_cidr":["10.0.0.0/8"],"port":[443]},{"ip_cidr":["192.0.2.0/24"]},{"ip_is_private":true,"domain":["b.example"]}"#)))
+        #expect(mixed.count == 2)
+        #expect(mixed[0]["domain_suffix"] as? [String] == ["a.example"] && mixed[0]["ip_cidr"] == nil && mixed[0]["port"] != nil)
+        #expect(mixed[1]["domain"] as? [String] == ["b.example"] && mixed[1]["ip_is_private"] == nil)
+
+        // An inverted rule, too: without its addresses it would match more.
+        #expect(RuleLists.names(src(#"{"domain":["e.example"],"ip_cidr":["10.0.0.0/8"],"invert":true},{"domain":["f.example"]}"#))
+                == RuleLists.names(src(#"{"domain":["f.example"]},{"ip_cidr":["10.0.0.0/8"]}"#)))
+
+        // A logical rule is kept whole or not at all.
+        let logical = try rules(RuleLists.names(src(
+            #"{"type":"logical","mode":"and","rules":[{"domain":["c.example"]},{"ip_cidr":["10.0.0.0/8"]}]},{"type":"logical","mode":"or","rules":[{"domain":["d.example"]}]},{"ip_cidr":["10.0.0.0/8"]}"#)))
+        #expect(logical.count == 1 && (logical[0]["mode"] as? String) == "or")
+    }
+
+    /// The generator: a mixed list's DNS rule takes its names file, a list
+    /// of names itself, a list of addresses none.
+    @Test func dnsRulesTakeNamesOnly() throws {
+        let lists = [RuleList(name: "mixed", url: "https://l.example/m.txt"), RuleList(name: "sites", url: "https://l.example/s.txt"),
+                     RuleList(name: "ips", url: "https://l.example/i.txt")]
+        let p = Profile(name: "P", routes: [Route(name: "R", conditions: Conditions(destinations: lists.map { .list($0.name) }), target: .direct)],
+                        defaultRoute: Route(name: "Everything else", target: .direct), lists: lists)
+        var env = SingBoxConfig.Environment(cacheFile: "/c", clashAPIPort: 9090, clashAPISecret: "s")
+        env.lists = [lists[0].url: .init(path: "/r/m.srs", namesPath: "/r/m.names.srs"),
+                     lists[1].url: .init(path: "/r/s.srs", namesPath: "/r/s.srs"),
+                     lists[2].url: .init(path: "/r/i.srs", namesPath: nil)]
+        let c = try SingBoxConfig.generate(p, env: env)
+        let dnsSets = (c["dns"]?["rules"]?.arrayValue ?? []).flatMap { $0["rule_set"]?.arrayValue ?? [] }
+        #expect(dnsSets == ["names-list-mixed", "list-sites"])
+        let sets = c["route"]?["rule_set"]?.arrayValue ?? []
+        #expect(sets.map { $0["tag"] } == ["list-mixed", "list-sites", "list-ips", "names-list-mixed"])
+        #expect(sets.last?["path"] == "/r/m.names.srs")
+        // The route itself still matches the whole list.
+        #expect(String(decoding: c.encoded(), as: UTF8.self).contains(#""list-mixed""#))
+        // A relative names path is refused, as any other.
+        env.lists[lists[0].url]?.namesPath = "m.names.srs"
+        #expect(throws: SingBoxConfig.Failure.self) { try SingBoxConfig.generate(p, env: env) }
     }
 }
 

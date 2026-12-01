@@ -3,7 +3,9 @@ import VPNCore
 
 /// The lists profiles use, kept on disk and up to date. Each one, by its
 /// address, is `rules/<key>.srs` (compiled, what sing-box reads) with
-/// `rules/<key>.json` (its address and kind), root's alone.
+/// `rules/<key>.json` (its address and kind), root's alone, and for a list
+/// of names and addresses `rules/<key>.names.srs`, its names alone, for
+/// the DNS rules (`RuleLists.names`).
 ///
 /// A list is fetched when a profile using it is saved or started, when
 /// someone asks (Update Now), and again once it is a day old. A rule-set
@@ -39,9 +41,12 @@ public actor RuleListStore {
         self.now = now
     }
 
-    struct Meta: Codable {
+    struct Meta: Codable, Equatable {
+        enum Names: String, Codable { case none, whole, part }
         var url: String
-        var matchesNames: Bool
+        /// Nil: written by a helper before names were kept apart (see
+        /// `upgrade`).
+        var names: Names?
     }
 
     // MARK: Reading
@@ -51,7 +56,15 @@ public actor RuleListStore {
         var out: [String: SingBoxConfig.LocalList] = [:]
         for url in urls where RuleLists.isValidURL(url) {
             guard isFile(srs(url)), let m = meta(url) else { continue }
-            out[url] = .init(path: srs(url).path, matchesNames: m.matchesNames)
+            // Until a list from an earlier helper is upgraded, its names do
+            // not choose the DNS server: whatever else it holds could send
+            // other names to its server.
+            let names: String? = switch m.names {
+            case .whole?: srs(url).path
+            case .part?: isFile(namesFile(url)) ? namesFile(url).path : nil
+            case .none?, nil: nil
+            }
+            out[url] = .init(path: srs(url).path, namesPath: names)
         }
         return out
     }
@@ -84,13 +97,15 @@ public actor RuleListStore {
 
     /// Every list on disk that is a day old.
     public func refreshStale() async {
-        let fm = FileManager.default
-        let urls = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).compactMap { n -> String? in
+        await update(allMeta().map(\.url), olderThan: Self.maxAge)
+    }
+
+    private func allMeta() -> [Meta] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).compactMap { n -> Meta? in
             guard n.hasSuffix(".json"), !n.hasPrefix("."),
                   let d = try? Data(contentsOf: dir.appendingPathComponent(n)) else { return nil }
-            return (try? JSONDecoder().decode(Meta.self, from: d))?.url
+            return try? JSONDecoder().decode(Meta.self, from: d)
         }
-        await update(urls, olderThan: Self.maxAge)
     }
 
     /// What earlier builds kept here (lists by their tag, folders per
@@ -102,9 +117,31 @@ public actor RuleListStore {
         guard fd >= 0 else { return }
         defer { close(fd) }
         for n in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        where n.range(of: #"^[0-9a-f]{24}\.(srs|json)$"#, options: .regularExpression) == nil && !n.hasPrefix(".") {
+        where n.range(of: #"^[0-9a-f]{24}\.(srs|json|names\.srs)$"#, options: .regularExpression) == nil && !n.hasPrefix(".") {
             SafeRemove.tree(in: fd, n)
         }
+    }
+
+    /// Lists an earlier helper kept, without their names apart: given them
+    /// from the copy on disk (read back by sing-box), nothing downloaded.
+    public func upgrade() async {
+        for m in allMeta() where m.names == nil {
+            let url = m.url
+            guard inflight[url] == nil, isFile(srs(url)) else { continue }
+            let t = Task { await self.upgradeOne(url) }
+            inflight[url] = t
+            await t.value
+        }
+    }
+
+    private func upgradeOne(_ url: String) async {
+        defer { inflight[url] = nil }
+        let stamp = UUID().uuidString
+        let source = dir.appendingPathComponent(".\(stamp).json")
+        defer { unlink(source.path) }
+        guard await tool(["decompile", srs(url).path, "-o", source.path]) == nil,
+              let data = try? Data(contentsOf: source) else { return }
+        try? await keepNames(url, source: data, compiled: nil)
     }
 
     private func fetchOne(_ url: String) async {
@@ -138,15 +175,14 @@ public actor RuleListStore {
 
         // Whatever came, as a source rule-set and a compiled one, both read
         // by sing-box.
-        let matchesNames: Bool
+        let source: Data
         if RuleLists.looksLikeBinary(data) {
             try write(data, to: tempSRS)
             if let why = await tool(["decompile", tempSRS.path, "-o", tempJSON.path]) {
                 throw Failure(reason: "sing-box cannot read the list: \(why)")
             }
-            matchesNames = RuleLists.matchesNames((try? Data(contentsOf: tempJSON)) ?? Data())
+            source = (try? Data(contentsOf: tempJSON)) ?? Data()
         } else {
-            let source: Data
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], obj["rules"] != nil {
                 source = data
             } else if let converted = RuleLists.sourceFromText(data) {
@@ -158,27 +194,59 @@ public actor RuleListStore {
             if let why = await tool(["compile", tempJSON.path, "-o", tempSRS.path]) {
                 throw Failure(reason: "sing-box cannot read the list: \(why)")
             }
-            matchesNames = RuleLists.matchesNames(source)
         }
         guard let compiled = try? Data(contentsOf: tempSRS) else { throw Failure(reason: "sing-box wrote nothing") }
+        try await keepNames(url, source: source, compiled: (compiled, tempSRS))
+    }
 
-        let metaData = try JSONEncoder().encode(Meta(url: url, matchesNames: matchesNames))
-        // The same as the copy on disk: only the date changes, and sing-box
-        // has nothing to reload.
-        if (try? Data(contentsOf: final)) == compiled, meta(url)?.matchesNames == matchesNames {
-            utimes(final.path, nil)
+    /// Puts a list in place with its names apart (`RuleLists.names`): the
+    /// names file, the meta, then the list (`compiled`; nil: the one on disk
+    /// stays, and its date: the date says when it was last downloaded).
+    /// Each by a rename, so a running sing-box only ever reads a whole
+    /// file. Unchanged, only the date changes, and sing-box has nothing to
+    /// reload.
+    private func keepNames(_ url: String, source: Data, compiled: (data: Data, file: URL)?) async throws {
+        let stamp = UUID().uuidString
+        let tempJSON = dir.appendingPathComponent(".\(stamp).names.json")
+        let tempNames = dir.appendingPathComponent(".\(stamp).names.srs")
+        let tempMeta = dir.appendingPathComponent(".\(stamp).meta")
+        defer { unlink(tempJSON.path); unlink(tempNames.path); unlink(tempMeta.path) }
+
+        let kind: Meta.Names
+        var names: Data?
+        switch RuleLists.names(source) {
+        case .none: kind = .none
+        case .whole: kind = .whole
+        case .part(let src):
+            kind = .part
+            try write(src, to: tempJSON)
+            if let why = await tool(["compile", tempJSON.path, "-o", tempNames.path]) {
+                throw Failure(reason: "sing-box cannot read the list's names: \(why)")
+            }
+            names = try? Data(contentsOf: tempNames)
+            guard names != nil else { throw Failure(reason: "sing-box wrote nothing") }
+        }
+        let meta = Meta(url: url, names: kind)
+        let final = srs(url)
+        if compiled.map({ (try? Data(contentsOf: final)) == $0.data }) ?? true, self.meta(url) == meta,
+           names.map({ (try? Data(contentsOf: namesFile(url))) == $0 }) ?? true {
+            if compiled != nil { utimes(final.path, nil) }
             return
         }
-        try write(metaData, to: tempJSON, replacing: true)
-        guard rename(tempJSON.path, metaFile(url).path) == 0, rename(tempSRS.path, final.path) == 0 else {
+        try write(try JSONEncoder().encode(meta), to: tempMeta)
+        if names != nil, rename(tempNames.path, namesFile(url).path) != 0 {
             throw Failure(reason: "cannot replace the list: \(String(cString: strerror(errno)))")
         }
+        guard rename(tempMeta.path, metaFile(url).path) == 0,
+              compiled.map({ rename($0.file.path, final.path) == 0 }) ?? true else {
+            throw Failure(reason: "cannot replace the list: \(String(cString: strerror(errno)))")
+        }
+        if names == nil { unlink(namesFile(url).path) }
     }
 
     /// A new file, never through a link, readable by everyone (the lists
     /// are public), written through before it is used.
-    private func write(_ data: Data, to url: URL, replacing: Bool = false) throws {
-        if replacing { unlink(url.path) }
+    private func write(_ data: Data, to url: URL) throws {
         let fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw Failure(reason: "cannot write \(url.path): \(String(cString: strerror(errno)))") }
         defer { close(fd) }
@@ -216,6 +284,7 @@ public actor RuleListStore {
 
     private func srs(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".srs") }
     private func metaFile(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".json") }
+    private func namesFile(_ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".names.srs") }
 
     /// curl, run with sing-box's group (`exec-engine`): the kill switch
     /// lets it out, so a VPN coming back behind it (after an update, a

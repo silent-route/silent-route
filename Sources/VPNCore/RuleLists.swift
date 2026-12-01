@@ -108,17 +108,56 @@ public enum RuleLists {
         return d.contains(".") && Validation.isValidDomain(d) ? d : nil
     }
 
-    /// Whether a source rule-set matches by name (domains), not only by
-    /// address: only such lists take part in choosing the DNS server.
-    public static func matchesNames(_ source: Data) -> Bool {
-        guard let obj = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
-              let rules = obj["rules"] as? [[String: Any]] else { return false }
-        func names(_ r: [String: Any]) -> Bool {
-            if ["domain", "domain_suffix", "domain_keyword", "domain_regex"].contains(where: { r[$0] != nil }) { return true }
-            return (r["rules"] as? [[String: Any]])?.contains(where: names) ?? false
-        }
-        return rules.contains(where: names)
+    /// What of a list can choose the DNS server: its names.
+    public enum Names: Equatable, Sendable {
+        /// No names: addresses only.
+        case none
+        /// Names only: the list itself.
+        case whole
+        /// Names and addresses: this source rule-set, its names alone.
+        case part(Data)
     }
+
+    static let nameFields = ["domain", "domain_suffix", "domain_keyword", "domain_regex"]
+    /// In a DNS rule sing-box matches these against the answer, after asking
+    /// the rule's server — for any name, in the list or not.
+    static let addressFields = ["ip_cidr", "ip_is_private"]
+
+    /// The names of a source rule-set, for DNS rules. Its addresses stay
+    /// out: there they would send names that are not in the list to the
+    /// list's DNS server too (only to see whether the answer is one of
+    /// them), past the tunnel when the list goes direct.
+    public static func names(_ source: Data) -> Names {
+        guard var obj = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
+              let rules = obj["rules"] as? [[String: Any]] else { return .none }
+        func has(_ r: [String: Any], _ fields: [String]) -> Bool {
+            fields.contains { r[$0] != nil } || ((r["rules"] as? [[String: Any]])?.contains { has($0, fields) } ?? false)
+        }
+        guard rules.contains(where: { has($0, nameFields) }) else { return .none }
+        guard rules.contains(where: { has($0, addressFields) }) else { return .whole }
+        // A plain rule loses its address fields (they only widen it: sing-box
+        // matches any of a rule's names and addresses); an inverted or a
+        // logical one is kept only without addresses, since taking a part
+        // out of it could make it match more.
+        var kept: [[String: Any]] = []
+        for r in rules {
+            if (r["type"] as? String ?? "default") == "default", r["invert"] as? Bool != true {
+                var named = r
+                for f in addressFields { named[f] = nil }
+                if has(named, nameFields) { kept.append(named) }
+            } else if has(r, nameFields), !has(r, addressFields) {
+                kept.append(r)
+            }
+        }
+        guard !kept.isEmpty else { return .none }
+        obj["rules"] = kept
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else { return .none }
+        return .part(data)
+    }
+
+    /// The rule-set tag of a list's names alone (`Names.part`). Not
+    /// `list-…`: no list name can make it.
+    public static func namesTag(_ name: String) -> String { "names-" + tag(name) }
 }
 
 /// One list, as the helper reports it.

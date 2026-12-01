@@ -22,15 +22,19 @@ import VPNCore
         }
     }
 
-    /// sing-box's rule-set tool, played: decompile writes a source, compile
-    /// writes a binary, each from the other; `broken` refuses everything.
+    /// sing-box's rule-set tool, played: compile writes a binary that holds
+    /// its source, decompile gives that source back (a list from elsewhere:
+    /// one site); `broken` refuses everything.
     static func tool(broken: Bool = false) -> RuleListStore.RuleSetTool {
         { args in
             if broken { return "read rule[0]: unexpected EOF" }
             guard args.count == 4, let input = try? Data(contentsOf: URL(fileURLWithPath: args[1])) else { return "bad call" }
             let out = URL(fileURLWithPath: args[3])
             switch args[0] {
-            case "decompile": try? Data(#"{"version":3,"rules":[{"domain_suffix":["a.example"]}]}"#.utf8).write(to: out)
+            case "decompile":
+                let mine = Data("SRS\u{3}{".utf8)
+                try? (input.starts(with: mine) ? input.dropFirst(4)
+                      : Data(#"{"version":3,"rules":[{"domain_suffix":["a.example"]}]}"#.utf8)).write(to: out)
             case "compile": try? (Data("SRS\u{3}".utf8) + input).write(to: out)
             default: return "unknown"
             }
@@ -55,7 +59,8 @@ import VPNCore
         #expect(try Data(contentsOf: file(dir, Self.a)) == Self.binary)
         let local = await store.local([Self.a, nope])
         #expect(local.keys.sorted() == [Self.a])
-        #expect(local[Self.a]?.matchesNames == true)
+        // Names only: the list itself chooses the DNS server.
+        #expect(local[Self.a]?.namesPath == file(dir, Self.a).path)
         let info = await store.info([Self.a, nope])
         #expect(info[0].bytes == Self.binary.count && info[0].updated != nil && info[0].error == nil)
         #expect(info[1].bytes == nil && info[1].error == "nothing at this address (HTTP 404)")
@@ -73,7 +78,50 @@ import VPNCore
         let compiled = try Data(contentsOf: file(dir, Self.text))
         #expect(compiled.prefix(3) == Data("SRS".utf8))
         // Addresses only: it plays no part in choosing a DNS server.
-        #expect(await store.local([Self.text])[Self.text]?.matchesNames == false)
+        #expect(await store.local([Self.text])[Self.text]?.namesPath == nil)
+    }
+
+    func names(_ dir: URL, _ url: String) -> URL { dir.appendingPathComponent(RuleLists.fileKey(url) + ".names.srs") }
+
+    /// Sites and addresses in one list: its sites alone, apart, for DNS.
+    /// When it holds only sites again, the list itself does.
+    @Test func mixedListKeepsItsNamesApart() async throws {
+        let server = Server()
+        server.answers[Self.text] = (200, Data("example.com\n10.0.0.0/8\n".utf8))
+        let (store, dir) = try make(server)
+        await store.update([Self.text], olderThan: 0)
+        #expect(await store.local([Self.text])[Self.text]?.namesPath == names(dir, Self.text).path)
+        let src = try #require(String(data: try Data(contentsOf: names(dir, Self.text)).dropFirst(4), encoding: .utf8))
+        #expect(src.contains("example.com") && !src.contains("10.0.0.0"))
+        // Not taken for something an earlier build left.
+        await store.removeLegacy()
+        #expect(FileManager.default.fileExists(atPath: names(dir, Self.text).path))
+
+        server.answers[Self.text] = (200, Data("example.com\n".utf8))
+        await store.update([Self.text], olderThan: 0)
+        #expect(await store.local([Self.text])[Self.text]?.namesPath == file(dir, Self.text).path)
+        #expect(!FileManager.default.fileExists(atPath: names(dir, Self.text).path))
+    }
+
+    /// A list an earlier helper kept: no part in choosing the DNS server
+    /// until upgraded from the copy on disk — nothing downloaded, its date
+    /// kept.
+    @Test func upgradesListsOfAnEarlierHelper() async throws {
+        let server = Server()
+        let (store, dir) = try make(server)
+        let key = RuleLists.fileKey(Self.text)
+        try (Data("SRS\u{3}".utf8) + Data(#"{"version":3,"rules":[{"domain_suffix":["example.com"]},{"ip_cidr":["10.0.0.0/8"]}]}"#.utf8))
+            .write(to: dir.appendingPathComponent(key + ".srs"))
+        try Data(#"{"url":"\#(Self.text)","matchesNames":true}"#.utf8).write(to: dir.appendingPathComponent(key + ".json"))
+        let old = Date(timeIntervalSinceNow: -3 * 3600)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: file(dir, Self.text).path)
+        #expect(await store.local([Self.text])[Self.text]?.namesPath == nil)
+
+        await store.upgrade()
+        #expect(await store.local([Self.text])[Self.text]?.namesPath == names(dir, Self.text).path)
+        #expect(server.requests.isEmpty)
+        let updated = try #require(await store.info([Self.text])[0].updated)
+        #expect(abs(updated.timeIntervalSince(old)) < 1)
     }
 
     /// A bad download never replaces a good list.
@@ -180,7 +228,7 @@ import VPNCore
     @Test func startFetchesFirst() async throws {
         let calls = Calls()
         let world = Box<World?>(nil)
-        let local = Dictionary(uniqueKeysWithValues: Profile.domesticLists.map { ($0.url, SingBoxConfig.LocalList(path: "/r/\($0.name).srs", matchesNames: false)) })
+        let local = Dictionary(uniqueKeysWithValues: Profile.domesticLists.map { ($0.url, SingBoxConfig.LocalList(path: "/r/\($0.name).srs", namesPath: nil)) })
         let h = Harness(ruleLists: .init(local: { _ in local }, fetchMissing: { _ in
             await calls.add()
             if let w = world.value { await w.set { $0.log.append("lists.fetch") } }
@@ -200,7 +248,7 @@ import VPNCore
     /// pass the kill switch as sing-box does), not refused for ever.
     @Test func resumeBehindTheKillSwitchFetchesMissingLists() async throws {
         let have = Box(false)
-        let local = Dictionary(uniqueKeysWithValues: Profile.domesticLists.map { ($0.url, SingBoxConfig.LocalList(path: "/r/\($0.name).srs", matchesNames: false)) })
+        let local = Dictionary(uniqueKeysWithValues: Profile.domesticLists.map { ($0.url, SingBoxConfig.LocalList(path: "/r/\($0.name).srs", namesPath: nil)) })
         let h = Harness(saved: PersistedState(wantConnected: true, enginePID: nil, pfToken: "T", bootTime: Date(timeIntervalSince1970: 500_000)),
                         ruleLists: .init(local: { _ in have.value ? local : [:] }, fetchMissing: { _ in have.value = true }))
         await h.controller.reconcileOnLaunch()

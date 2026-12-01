@@ -28,7 +28,8 @@ enum Fixtures {
     /// lists match names, the country's addresses do not.
     static func lists(in dir: String) -> [String: SingBoxConfig.LocalList] {
         Dictionary(uniqueKeysWithValues: Profile.domesticLists.map {
-            ($0.url, .init(path: "\(dir)/\(RuleLists.fileKey($0.url)).srs", matchesNames: $0.name.hasPrefix("geosite-")))
+            ($0.url, .init(path: "\(dir)/\(RuleLists.fileKey($0.url)).srs",
+                           namesPath: $0.name.hasPrefix("geosite-") ? "\(dir)/\(RuleLists.fileKey($0.url)).srs" : nil))
         })
     }
 
