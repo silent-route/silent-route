@@ -270,8 +270,8 @@ enum SingBox {
     }
 
     /// Runs a config for two seconds, its TUN inbound (if any) swapped for
-    /// a local proxy with the same tag; what sing-box printed. Fails if it
-    /// stopped by itself.
+    /// a local proxy with the same tag and its DHCP DNS server for a local
+    /// one; what sing-box printed. Fails if it stopped by itself.
     static func runBriefly(_ config: JSON, in dir: URL) throws -> String {
         var obj = try #require(try JSONSerialization.jsonObject(with: config.encoded()) as? [String: Any])
         var inbounds = try #require(obj["inbounds"] as? [[String: Any]])
@@ -279,6 +279,15 @@ enum SingBox {
             inbounds[tun] = ["type": "mixed", "tag": inbounds[tun]["tag"] ?? "", "listen": "127.0.0.1", "listen_port": Int(freePort())]
         }
         obj["inbounds"] = inbounds
+        // The Mac's DNS from DHCP: a CI machine may have no DHCP to ask,
+        // and says so as an error. A local server stands in.
+        if var dns = obj["dns"] as? [String: Any], var servers = dns["servers"] as? [[String: Any]] {
+            for i in servers.indices where servers[i]["type"] as? String == "dhcp" {
+                servers[i] = ["type": "udp", "tag": servers[i]["tag"] ?? "", "server": "127.0.0.1"]
+            }
+            dns["servers"] = servers
+            obj["dns"] = dns
+        }
         let file = dir.appendingPathComponent("run-\(UUID().uuidString).json")
         try JSONSerialization.data(withJSONObject: obj).write(to: file)
         let p = Process()
